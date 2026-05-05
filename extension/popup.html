@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <div class="popup-header">
+      <div class="popup-logo">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#409eff" stroke-width="2">
+          <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
+          <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
+        </svg>
+        <span>微信读书素材助手</span>
+      </div>
+    </div>
+
+    <!-- 未登录 -->
+    <div id="loginView" class="popup-body">
+      <div class="popup-field">
+        <label>服务器地址</label>
+        <input type="text" id="apiBase" placeholder="http://localhost:8000" value="http://localhost:8000" />
+      </div>
+      <div class="popup-field">
+        <label>邮箱</label>
+        <input type="email" id="email" placeholder="your@email.com" />
+      </div>
+      <div class="popup-field">
+        <label>密码</label>
+        <input type="password" id="password" placeholder="密码" />
+      </div>
+      <button class="popup-btn" id="loginBtn">登录</button>
+      <div class="popup-msg" id="loginMsg"></div>
+    </div>
+
+    <!-- 已登录 -->
+    <div id="userView" class="popup-body" style="display:none">
+      <div class="popup-user-info">
+        <div class="popup-user-avatar" id="userAvatar"></div>
+        <div class="popup-user-detail">
+          <div class="popup-user-name" id="userName"></div>
+          <div class="popup-user-email" id="userEmail"></div>
+        </div>
+      </div>
+      <div class="popup-tip">
+        <p>在微信读书中选中文字，点击弹出的"记录素材"按钮即可保存。</p>
+      </div>
+      <button class="popup-btn popup-btn-secondary" id="logoutBtn">退出登录</button>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

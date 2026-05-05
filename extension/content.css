@@ -1,0 +1,232 @@
+/* content.css - 微信读书截图素材助手样式 */
+
+/* ========== 常驻浮动按钮 ========== */
+.weread-saver-fab {
+  position: fixed;
+  right: 20px;
+  bottom: 80px;
+  width: 48px;
+  height: 48px;
+  background: #409eff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(64, 158, 255, 0.4);
+  z-index: 99998;
+  transition: all 0.2s;
+  color: #fff;
+}
+
+.weread-saver-fab:hover {
+  background: #337ecc;
+  transform: scale(1.1);
+  box-shadow: 0 6px 20px rgba(64, 158, 255, 0.5);
+}
+
+/* ========== 保存面板 ========== */
+.weread-saver-panel {
+  position: fixed;
+  top: 10vh;
+  right: 24px;
+  width: 400px;
+  max-height: 80vh;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.2);
+  z-index: 99999;
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  animation: weread-slideIn 0.2s ease-out;
+  overflow: hidden;
+}
+
+@keyframes weread-slideIn {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.weread-saver-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid #eee;
+  background: #f8f9fa;
+}
+
+.weread-saver-panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1a1a2e;
+}
+
+.weread-saver-panel-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  color: #999;
+  cursor: pointer;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.weread-saver-panel-close:hover {
+  background: #eee;
+  color: #333;
+}
+
+.weread-saver-panel-body {
+  padding: 14px 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.weread-saver-field {
+  margin-bottom: 12px;
+}
+
+.weread-saver-field label {
+  display: block;
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.weread-saver-field label .required {
+  color: #f56c6c;
+  margin-left: 2px;
+}
+
+/* ========== 截图拖放区 ========== */
+.weread-saver-dropzone {
+  border: 2px dashed #ddd;
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.weread-saver-dropzone:hover {
+  border-color: #409eff;
+  background: #f5f9ff;
+}
+
+.weread-saver-dropzone.dragover {
+  border-color: #409eff;
+  background: #ecf5ff;
+}
+
+.weread-saver-dropzone-hint p {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #666;
+}
+
+.weread-saver-dropzone-hint p.sub {
+  font-size: 11px;
+  color: #999;
+}
+
+.weread-saver-dropzone-hint kbd {
+  background: #f0f0f0;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 12px;
+  font-family: monospace;
+}
+
+.weread-saver-preview {
+  max-width: 100%;
+  max-height: 200px;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+/* ========== 表单元素 ========== */
+.weread-saver-textarea {
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #333;
+  line-height: 1.6;
+  resize: vertical;
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.weread-saver-textarea:focus {
+  outline: none;
+  border-color: #409eff;
+}
+
+.weread-saver-input {
+  width: 100%;
+  padding: 7px 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #333;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+
+.weread-saver-input:focus {
+  outline: none;
+  border-color: #409eff;
+}
+
+/* ========== 底部 ========== */
+.weread-saver-panel-footer {
+  padding: 12px 18px;
+  border-top: 1px solid #eee;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #f8f9fa;
+}
+
+.weread-saver-status {
+  font-size: 12px;
+  color: #888;
+}
+
+.weread-saver-status.success { color: #67c23a; }
+.weread-saver-status.error { color: #f56c6c; }
+
+.weread-saver-save-btn {
+  padding: 8px 20px;
+  border: none;
+  background: #409eff;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s;
+  font-family: inherit;
+}
+
+.weread-saver-save-btn:hover { background: #337ecc; }
+.weread-saver-save-btn:disabled { background: #a0cfff; cursor: not-allowed; }
