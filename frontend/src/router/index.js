@@ -32,6 +32,21 @@ const routes = [
     component: () => import('../views/Materials.vue')
   },
   {
+    path: '/chat',
+    name: 'Chat',
+    component: () => import('../views/Chat.vue')
+  },
+  {
+    path: '/chat/roles',
+    name: 'ChatRoles',
+    component: () => import('../views/ChatRoles.vue')
+  },
+  {
+    path: '/chat/:conversationId',
+    name: 'ChatConversation',
+    component: () => import('../views/Chat.vue')
+  },
+  {
     path: '/settings/ai-models',
     name: 'AIModelSettings',
     component: () => import('../views/AIModelSettings.vue')

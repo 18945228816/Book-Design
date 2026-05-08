@@ -103,8 +103,15 @@ const formatDate = (dateStr) => {
     <header class="top-bar">
       <div class="logo">
         <el-icon :size="22"><Reading /></el-icon>
-        <span>读书感悟记录系统</span>
+        <span>智能助手平台</span>
       </div>
+      <nav class="nav-links">
+        <el-button link @click="goTo('/')">首页</el-button>
+        <el-button link @click="goTo('/books')">书籍</el-button>
+        <el-button link @click="goTo('/materials')">素材</el-button>
+        <el-button link type="primary" @click="goTo('/chat')">AI 对话</el-button>
+        <el-button link @click="goTo('/chat/roles')">角色管理</el-button>
+      </nav>
       <div class="user-info">
         <span class="username">{{ user.username }}</span>
         <el-button text @click="handleLogout">退出</el-button>
@@ -118,11 +125,15 @@ const formatDate = (dateStr) => {
           <h1>记录你的阅读时光</h1>
           <p class="hero-desc">摘录金句 · 收藏感悟 · 积累素材</p>
           <div class="hero-actions">
-            <el-button type="primary" size="large" @click="goTo('/books')">
+            <el-button type="primary" size="large" @click="goTo('/chat')">
+              <el-icon><ChatDotSquare /></el-icon>
+              AI 对话
+            </el-button>
+            <el-button type="success" size="large" @click="goTo('/books')">
               <el-icon><Reading /></el-icon>
               我的书籍
             </el-button>
-            <el-button type="success" size="large" @click="goTo('/materials')">
+            <el-button type="info" size="large" @click="goTo('/materials')">
               <el-icon><Collection /></el-icon>
               素材库
             </el-button>
@@ -253,6 +264,11 @@ const formatDate = (dateStr) => {
   font-size: 17px;
   font-weight: 600;
   color: #303133;
+}
+
+.nav-links {
+  display: flex;
+  gap: 4px;
 }
 
 .user-info {

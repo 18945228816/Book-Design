@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     AI_TASK_ROUTE_DEFAULT: str = "sensenova,zhipu,deepseek,qwen,doubao,openai,legacy"
     AI_TASK_ROUTE_TAG_GENERATION: str = "sensenova,zhipu,qwen,deepseek,doubao,openai,legacy"
     AI_TASK_ROUTE_MATERIAL_ANALYSIS: str = "sensenova,zhipu,deepseek,qwen,doubao,openai,legacy"
+    AI_TASK_ROUTE_CHAT_COMPLETION: str = "sensenova,zhipu,deepseek,qwen,doubao,openai,legacy"
 
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
@@ -48,12 +49,17 @@ class Settings(BaseSettings):
     ZHIPU_BASE_URL: str = "https://open.bigmodel.cn/api/paas/v4"
     ZHIPU_MODEL: str = "glm-5.1"
 
+    LOG_LEVEL: str = "INFO"
+    LOG_DIR: str = "logs"
+    LOG_RETENTION_DAYS: int = 30
+
     @property
     def AI_TASK_ROUTES(self) -> dict:
         return {
             "default": [item.strip() for item in self.AI_TASK_ROUTE_DEFAULT.split(",") if item.strip()],
             "tag_generation": [item.strip() for item in self.AI_TASK_ROUTE_TAG_GENERATION.split(",") if item.strip()],
             "material_analysis": [item.strip() for item in self.AI_TASK_ROUTE_MATERIAL_ANALYSIS.split(",") if item.strip()],
+            "chat_completion": [item.strip() for item in self.AI_TASK_ROUTE_CHAT_COMPLETION.split(",") if item.strip()],
         }
 
     @property

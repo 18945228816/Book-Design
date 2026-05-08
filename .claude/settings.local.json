@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"c:/Users/admin/Desktop/Book-Design\" log --oneline -10)",
+      "Bash(curl -s http://localhost:8000/api/v1/chat/roles)",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"test@example.com\",\"password\":\"123456\"}')",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/auth/register -H 'Content-Type: application/json' -d '{\"email\":\"test@example.com\",\"password\":\"123456\",\"username\":\"测试用户\"}')",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/auth/register -H 'Content-Type: application/json' --data-raw '{\"email\":\"test@example.com\",\"password\":\"123456\",\"username\":\"testuser\"}')",
+      "Bash(curl -s http://localhost:8000/api/v1/chat/roles -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyYTJmMDczYi03NTg3LTRjOTctOGY3ZC1kNGE4ZjI1MmQ4MjUiLCJleHAiOjE3Nzg1OTQ3MjN9.-bpT1ZbLw-7r3K8q_X_MsCNfoGgLIxOg0Nw1Hn42gfg')",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/chat/conversations/862541e9-ecef-488d-9c44-77f4aa379ed9/messages/sync -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyYTJmMDczYi03NTg3LTRjOTctOGY3ZC1kNGE4ZjI1MmQ4MjUiLCJleHAiOjE3Nzg1OTQ3MjN9.-bpT1ZbLw-7r3K8q_X_MsCNfoGgLIxOg0Nw1Hn42gfg' -H 'Content-Type: application/json' --data-raw '{\"content\":\"你好，请简单介绍一下自己\"}')",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/chat/conversations/862541e9-ecef-488d-9c44-77f4aa379ed9/messages/sync -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyYTJmMDczYi03NTg3LTRjOTctOGY3ZC1kNGE4ZjI1MmQ4MjUiLCJleHAiOjE3Nzg1OTQ3MjN9.-bpT1ZbLw-7r3K8q_X_MsCNfoGgLIxOg0Nw1Hn42gfg' -H 'Content-Type: application/json' -d '{\"content\":\"hello\"}')",
+      "Bash(curl -s 'http://localhost:8000/api/v1/admin/ai/models?type=chat&enabled=1' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyYTJmMDczYi03NTg3LTRjOTctOGY3ZC1kNGE4ZjI1MmQ4MjUiLCJleHAiOjE3Nzg1OTQ3MjN9.-bpT1ZbLw-7r3K8q_X_MsCNfoGgLIxOg0Nw1Hn42gfg')",
+      "Bash(python -c \"import sys,json; data=json.load\\(sys.stdin\\); [print\\(f'{m[\\\\\"provider_name\\\\\"]} - {m[\\\\\"model_key\\\\\"]}'\\) for m in data]\")",
+      "Bash(curl -s http://localhost:8000/api/v1/chat/conversations -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyYTJmMDczYi03NTg3LTRjOTctOGY3ZC1kNGE4ZjI1MmQ4MjUiLCJleHAiOjE3Nzg1OTQ3MjN9.-bpT1ZbLw-7r3K8q_X_MsCNfoGgLIxOg0Nw1Hn42gfg')",
+      "Bash(python -c \"import sys,json; data=json.load\\(sys.stdin\\); print\\(data[0]['id'] if data else 'No conversations'\\)\")",
+      "Bash(timeout 15 curl -s -N http://localhost:8000/api/v1/chat/conversations/862541e9-ecef-488d-9c44-77f4aa379ed9/messages -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyYTJmMDczYi03NTg3LTRjOTctOGY3ZC1kNGE4ZjI1MmQ4MjUiLCJleHAiOjE3Nzg1OTQ3MjN9.-bpT1ZbLw-7r3K8q_X_MsCNfoGgLIxOg0Nw1Hn42gfg' -H 'Content-Type: application/json' -d '{\"content\":\"hi\"}')",
+      "Bash(timeout 30 curl -s http://localhost:8000/api/v1/chat/conversations/862541e9-ecef-488d-9c44-77f4aa379ed9/messages/sync -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyYTJmMDczYi03NTg3LTRjOTctOGY3ZC1kNGE4ZjI1MmQ4MjUiLCJleHAiOjE3Nzg1OTQ3MjN9.-bpT1ZbLw-7r3K8q_X_MsCNfoGgLIxOg0Nw1Hn42gfg' -H 'Content-Type: application/json' -d '{\"content\":\"hello test\"}')",
+      "Bash(curl -s http://localhost:8000/api/v1/admin/ai/task-routes -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyYTJmMDczYi03NTg3LTRjOTctOGY3ZC1kNGE4ZjI1MmQ4MjUiLCJleHAiOjE3Nzg1OTQ3MjN9.-bpT1ZbLw-7r3K8q_X_MsCNfoGgLIxOg0Nw1Hn42gfg')",
+      "Bash(cd /c/Users/admin/Desktop/Book-Design/backend && ls *.py pyproject.toml requirements.txt 2>/dev/null | head -5)",
+      "Read(//c/c/Users/admin/Desktop/Book-Design/**)",
+      "Bash(taskkill //F //PID 22368)",
+      "Bash(taskkill //F //PID 1796)",
+      "Bash(sleep 3 && cat /c/Users/admin/AppData/Local/Temp/claude/c--Users-admin-Desktop-Book-Design/a455d767-c67d-400f-bdd5-29d173a18543/tasks/bubi5m3b0.output | tail -10)",
+      "Read(//c/Users/admin/AppData/Local/Temp/claude/c--Users-admin-Desktop-Book-Design/a455d767-c67d-400f-bdd5-29d173a18543/tasks/**)",
+      "Bash(taskkill //F //PID 15316)",
+      "Bash(taskkill //F //PID 37376)",
+      "Bash(taskkill //F //PID 9596)"
+    ]
+  }
+}

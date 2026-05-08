@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
@@ -11,9 +12,12 @@ from typing import List, Optional
 import uuid
 import os
 import json
+import time
+import traceback
 import httpx
 
 from .database import engine, Base, get_db
+from . import chat_models  # noqa: F401 - register chat tables on shared metadata
 from .models import (
     User,
     Book,
@@ -26,9 +30,11 @@ from .models import (
     AICallLog,
 )
 from .config import settings
+from .chat_router import router as chat_router
 from .ai_service import analyze_material as ai_analyze_material
 from .ai_service import generate_tags as ai_generate_tags_multi
 from .txt_parser import read_txt_file, parse_book_info, parse_chapters, flatten_chapters
+from .logger import get_logger, get_access_logger
 
 # 创建数据库表
 Base.metadata.create_all(bind=engine)
@@ -62,7 +68,7 @@ def ensure_material_ai_columns():
                 if name not in existing:
                     conn.execute(text(f"ALTER TABLE materials ADD COLUMN {name} {ddl}"))
     except Exception as exc:
-        print(f"ensure_material_ai_columns skipped: {exc}")
+        logger.warning(f"ensure_material_ai_columns skipped: {exc}")
 
 
 ensure_material_ai_columns()
@@ -79,10 +85,27 @@ def ensure_ai_model_columns():
             if "endpoint_path" not in existing:
                 conn.execute(text("ALTER TABLE ai_models ADD COLUMN endpoint_path VARCHAR(300) NULL"))
     except Exception as exc:
-        print(f"ensure_ai_model_columns skipped: {exc}")
+        logger.warning(f"ensure_ai_model_columns skipped: {exc}")
 
 
 ensure_ai_model_columns()
+
+
+def ensure_chat_columns():
+    """Add chat columns for existing databases without Alembic."""
+    try:
+        inspector = inspect(engine)
+        if not inspector.has_table("chat_conversations"):
+            return
+        existing = {col["name"] for col in inspector.get_columns("chat_conversations")}
+        with engine.begin() as conn:
+            if "category" not in existing:
+                conn.execute(text("ALTER TABLE chat_conversations ADD COLUMN category VARCHAR(50) NULL"))
+    except Exception as exc:
+        logger.warning(f"ensure_chat_columns skipped: {exc}")
+
+
+ensure_chat_columns()
 
 
 def seed_ai_model_settings():
@@ -212,14 +235,115 @@ def seed_ai_model_settings():
                 db.commit()
     except Exception as exc:
         db.rollback()
-        print(f"seed_ai_model_settings skipped: {exc}")
+        logger.warning(f"seed_ai_model_settings skipped: {exc}")
     finally:
         db.close()
 
 
 seed_ai_model_settings()
 
-app = FastAPI(title="读书感悟记录系统")
+
+def seed_chat_defaults():
+    """Seed default chat personas and the chat_completion task route."""
+    from .database import SessionLocal
+    from .chat_models import ChatRole
+
+    presets = [
+        {
+            "name": "通用助手",
+            "avatar": "✨",
+            "description": "日常问答、信息查询和任务处理。",
+            "system_prompt": "你是一个可靠、清晰、友好的通用 AI 助手。请用用户使用的语言回答，必要时主动澄清关键约束。",
+        },
+        {
+            "name": "读书助手",
+            "avatar": "📖",
+            "description": "帮助理解书籍、分析人物和整理读后感。",
+            "system_prompt": "你是读书助手，擅长帮助用户理解书籍内容、人物关系、主题和写作手法。回答要有文本意识，避免编造书中没有的信息。",
+        },
+        {
+            "name": "写作教练",
+            "avatar": "✍️",
+            "description": "提供写作建议、结构梳理和润色。",
+            "system_prompt": "你是写作教练，擅长帮助用户梳理结构、打磨表达、改进文风。反馈要具体、温和，并给出可操作的修改示例。",
+        },
+        {
+            "name": "数学老师",
+            "avatar": "🧑‍🏫",
+            "description": "用循序渐进的方式讲解数学概念和题目。",
+            "system_prompt": "你是耐心的数学老师。请先判断用户的理解水平，再用直观例子和分步骤推导解释数学问题。",
+        },
+        {
+            "name": "编程导师",
+            "avatar": "💻",
+            "description": "代码指导、技术答疑和项目建议。",
+            "system_prompt": "你是资深编程导师。请优先定位问题本质，给出简洁可靠的方案，并在需要时补充代码示例和测试建议。",
+        },
+        {
+            "name": "英语外教",
+            "avatar": "🌍",
+            "description": "英语对话练习、语法纠错和口语提升。",
+            "system_prompt": "You are a friendly English tutor. Help the user practice English conversation, correct grammar mistakes, and improve spoken expression. Respond in the user's language when explaining grammar, but encourage English practice during conversation.",
+        },
+        {
+            "name": "创意伙伴",
+            "avatar": "💡",
+            "description": "头脑风暴、灵感激发和创意写作。",
+            "system_prompt": "你是创意伙伴，擅长头脑风暴和灵感激发。请用开放、鼓励的方式帮助用户探索想法，提供多元视角，不急于否定任何创意。在需要时给出具体的创意示例。",
+        },
+        {
+            "name": "生活顾问",
+            "avatar": "🌿",
+            "description": "日常建议、健康提醒和生活规划。",
+            "system_prompt": "你是生活顾问，擅长提供日常建议、时间管理和生活规划。请以温和、实用的方式给出建议，尊重用户的个人选择，不做强迫性推荐。",
+        },
+    ]
+
+    db = SessionLocal()
+    try:
+        for item in presets:
+            exists = db.query(ChatRole).filter(
+                ChatRole.role_type == "preset",
+                ChatRole.name == item["name"],
+            ).first()
+            if exists:
+                continue
+            db.add(ChatRole(
+                user_id=None,
+                role_type="preset",
+                is_public=1,
+                **item,
+            ))
+
+        has_chat_route = db.query(AITaskRoute).filter(AITaskRoute.task_type == "chat_completion").first()
+        if not has_chat_route:
+            model = db.query(AIModel).join(AIProvider, AIModel.provider_id == AIProvider.id).filter(
+                AIProvider.enabled == 1,
+                AIModel.enabled == 1,
+                AIModel.model_type == "chat",
+            ).order_by(AIProvider.is_default.desc(), AIModel.priority.asc()).first()
+            if model:
+                db.add(AITaskRoute(
+                    id=str(uuid.uuid4()),
+                    task_type="chat_completion",
+                    provider_id=model.provider_id,
+                    model_id=model.id,
+                    route_order=1,
+                    strategy="quality_first",
+                    timeout_seconds=settings.AI_REQUEST_TIMEOUT,
+                    enabled=1,
+                ))
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning(f"seed_chat_defaults skipped: {exc}")
+    finally:
+        db.close()
+
+
+seed_chat_defaults()
+
+app = FastAPI(title="智能助手平台")
 
 # CORS
 app.add_middleware(
@@ -230,7 +354,112 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ====== 日志 ======
+logger = get_logger(__name__)
+access_logger = get_access_logger()
+
+SENSITIVE_FIELDS = {"password", "passwd", "secret", "token", "authorization"}
+
+
+def _sanitize_body(body: bytes) -> str:
+    """Decode request body and mask sensitive fields."""
+    try:
+        data = json.loads(body)
+        if isinstance(data, dict):
+            for key in data:
+                if key.lower() in SENSITIVE_FIELDS:
+                    data[key] = "***"
+        return json.dumps(data, ensure_ascii=False)[:2000]
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return f"<binary {len(body)} bytes>"
+
+
+def _extract_user_info(request) -> tuple:
+    """Extract user_id and username from JWT token in request."""
+    try:
+        auth = request.headers.get("authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            user_id = payload.get("sub", "")
+            return user_id, "authenticated"
+    except Exception:
+        pass
+    return "", "anonymous"
+
+
+@app.middleware("http")
+async def logging_middleware(request, call_next):
+    start = time.time()
+    body = b""
+    if request.method in ("POST", "PUT", "PATCH"):
+        body = await request.body()
+
+    response = await call_next(request)
+    elapsed = int((time.time() - start) * 1000)
+
+    user_id, user_label = _extract_user_info(request)
+    client_ip = request.client.host if request.client else "unknown"
+    path = str(request.url.path)
+    if request.url.query:
+        path += f"?{request.url.query}"
+
+    log_line = f"{request.method} {path} | {response.status_code} | {elapsed}ms | {user_label}"
+    if user_id:
+        log_line += f":{user_id}"
+    log_line += f" | {client_ip}"
+
+    if response.status_code >= 500:
+        logger.error(log_line)
+    elif response.status_code >= 400:
+        logger.warning(log_line)
+    else:
+        logger.info(log_line)
+        access_logger.info(log_line)
+
+    if body:
+        body_str = _sanitize_body(body)
+        if response.status_code >= 400:
+            logger.warning(f"  Body: {body_str}")
+        else:
+            logger.info(f"  Body: {body_str}")
+            access_logger.info(f"  Body: {body_str}")
+
+    return response
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    user_id, user_label = _extract_user_info(request)
+    client_ip = request.client.host if request.client else "unknown"
+    body = b""
+    try:
+        body = await request.body()
+    except Exception:
+        pass
+
+    error_detail = (
+        f"Unhandled exception | {request.method} {request.url.path}\n"
+        f"  User: {user_label}"
+    )
+    if user_id:
+        error_detail += f":{user_id}"
+    error_detail += f" | IP: {client_ip}\n"
+    if body:
+        error_detail += f"  Body: {_sanitize_body(body)}\n"
+    error_detail += f"  {traceback.format_exc()}"
+
+    logger.error(error_detail)
+
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "服务器内部错误，请查看日志获取详情"},
+    )
+
+
 # 密码加密
+app.include_router(chat_router)
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
@@ -721,6 +950,8 @@ async def create_ai_provider(
     db.add(provider)
     db.commit()
     db.refresh(provider)
+
+    logger.info(f"创建AI Provider成功: provider_key={req.provider_key}, display_name={req.display_name}")
     return _provider_response(provider)
 
 
@@ -748,6 +979,8 @@ async def update_ai_provider(
         provider.is_default = 1 if req.is_default else 0
     db.commit()
     db.refresh(provider)
+
+    logger.info(f"更新AI Provider成功: provider_id={provider_id}, provider_key={provider.provider_key}")
     return _provider_response(provider)
 
 
@@ -766,6 +999,8 @@ async def delete_ai_provider(
     db.query(AIModel).filter(AIModel.provider_id == provider_id).delete()
     db.delete(provider)
     db.commit()
+
+    logger.info(f"删除AI Provider成功: provider_id={provider_id}, provider_key={provider.provider_key}")
 
 
 @app.get("/api/v1/admin/ai/models", response_model=List[AIModelResponse])
@@ -810,6 +1045,8 @@ async def create_ai_model(
     db.add(model)
     db.commit()
     db.refresh(model)
+
+    logger.info(f"创建AI Model成功: model_key={req.model_key}, display_name={req.display_name}, provider={provider.provider_key}")
     return _model_response(model, provider)
 
 
@@ -841,6 +1078,8 @@ async def update_ai_model(
         model.notes = req.notes
     db.commit()
     db.refresh(model)
+
+    logger.info(f"更新AI Model成功: model_id={model_id}, model_key={model.model_key}")
     return _model_response(model)
 
 
@@ -856,6 +1095,8 @@ async def delete_ai_model(
     db.query(AITaskRoute).filter(AITaskRoute.model_id == model_id).delete()
     db.delete(model)
     db.commit()
+
+    logger.info(f"删除AI Model成功: model_id={model_id}, model_key={model.model_key}")
 
 
 @app.get("/api/v1/admin/ai/task-routes", response_model=List[AITaskRouteResponse])
@@ -896,6 +1137,8 @@ async def update_ai_task_route(
         ))
     db.commit()
     routes = db.query(AITaskRoute).filter(AITaskRoute.task_type == task_type).order_by(AITaskRoute.route_order.asc()).all()
+
+    logger.info(f"更新AI Task Route成功: task_type={task_type}, 路由数={len(req.routes)}")
     return [_route_response(route) for route in routes]
 
 
@@ -1051,6 +1294,7 @@ async def root():
 async def register(req: RegisterRequest, db: Session = Depends(get_db)):
     # 检查邮箱是否已存在
     if db.query(User).filter(User.email == req.email).first():
+        logger.warning(f"用户注册失败: username={req.username}, 原因=邮箱已被注册({req.email})")
         raise HTTPException(status_code=400, detail="邮箱已被注册")
 
     # 创建用户
@@ -1064,6 +1308,7 @@ async def register(req: RegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
+    logger.info(f"用户注册成功: username={req.username}, email={req.email}, user_id={user.id}")
     return TokenResponse(
         user_id=user.id,
         email=user.email,
@@ -1076,8 +1321,10 @@ async def register(req: RegisterRequest, db: Session = Depends(get_db)):
 async def login(req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == req.email).first()
     if not user or not verify_password(req.password, user.password_hash):
+        logger.warning(f"用户登录失败: email={req.email}, 原因=邮箱或密码错误")
         raise HTTPException(status_code=401, detail="邮箱或密码错误")
 
+    logger.info(f"用户登录成功: username={user.username}, user_id={user.id}")
     return TokenResponse(
         user_id=user.id,
         email=user.email,
@@ -1159,12 +1406,19 @@ async def upload_book(
 
         db.commit()
         db.refresh(book)
+
+        logger.info(
+            f"上传书籍成功: title={book_title}, author={book_author}, "
+            f"filename={file.filename}, file_size={len(file_bytes)}, "
+            f"chapters={len(chapters_data)}, user={current_user.username}"
+        )
         return book
 
     except HTTPException:
         raise
     except Exception as e:
         db.rollback()
+        logger.exception(f"上传书籍失败: filename={file.filename}, user={current_user.username}, error={e}")
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
 
 
@@ -1360,6 +1614,8 @@ async def update_chapters(
     book.chapters_count = len(req.chapters)
     db.commit()
     db.refresh(book)
+
+    logger.info(f"更新章节成功: book_id={book_id}, title={book.title}, 章节数={len(req.chapters)}, user={current_user.username}")
     return {"message": "保存成功", "chapters_count": book.chapters_count}
 
 
@@ -1386,6 +1642,8 @@ async def delete_book(
     db.query(Chapter).filter(Chapter.book_id == book_id).delete()
     db.delete(book)
     db.commit()
+
+    logger.info(f"删除书籍成功: book_id={book_id}, title={book.title}, user={current_user.username}")
 
 
 @app.put("/api/v1/books/{book_id}/chapters")
@@ -1812,12 +2070,15 @@ async def create_material(
         if req.status == "completed":
             background_tasks.add_task(background_analyze_material, material.id)
 
+        logger.info(
+            f"创建素材成功: material_id={material.id}, book_id={req.book_id}, "
+            f"source_type={req.source_type}, content_length={len(req.content or '')}, user={current_user.username}"
+        )
         return _build_material_response(material, db)
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"创建素材失败: {e}")
         raise HTTPException(status_code=500, detail=f"创建素材失败: {str(e)}")
 
 
@@ -1958,6 +2219,7 @@ async def delete_material(
     if not mat:
         raise HTTPException(status_code=404, detail="素材不存在")
 
+    logger.info(f"删除素材成功: material_id={material_id}, book_id={mat.book_id}, user={current_user.username}")
     db.delete(mat)
     db.commit()
 
@@ -2044,6 +2306,8 @@ async def analyze_material(
     db.commit()
     db.refresh(mat)
     background_tasks.add_task(background_analyze_material, mat.id)
+
+    logger.info(f"AI分析素材已排队: material_id={material_id}, user={current_user.username}")
     return _build_material_response(mat, db)
 
 
