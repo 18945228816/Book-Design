@@ -15,6 +15,8 @@ const chapters = ref([])
 const loading = ref(false)
 const currentChapter = ref(null)
 const expandedSections = ref({})
+const sidebarVisible = ref(true)
+const isMobile = ref(window.innerWidth <= 768)
 
 const materialDialogVisible = ref(false)
 const materialForm = ref({
@@ -147,13 +149,29 @@ const fetchBook = async () => {
   }
 }
 
+const toggleSidebar = () => {
+  sidebarVisible.value = !sidebarVisible.value
+}
+
+const handleResize = () => {
+  isMobile.value = window.innerWidth <= 768
+  if (isMobile.value) {
+    sidebarVisible.value = false
+  }
+}
+
 onMounted(() => {
   fetchBook()
   document.addEventListener('mouseup', handleMouseUp)
+  window.addEventListener('resize', handleResize)
+  if (isMobile.value) {
+    sidebarVisible.value = false
+  }
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('mouseup', handleMouseUp)
+  window.removeEventListener('resize', handleResize)
   if (saveProgressTimer.value) {
     clearTimeout(saveProgressTimer.value)
   }
@@ -575,10 +593,20 @@ watch(chapters, async (newVal) => {
     </el-card>
 
     <div class="content-area">
-      <el-card class="chapters-card">
-        <template #header>
-          <span>章节列表</span>
-        </template>
+      <div v-if="isMobile && sidebarVisible" class="sidebar-overlay" @click="sidebarVisible = false"></div>
+      <div class="sidebar-toggle" @click="toggleSidebar">
+        <el-icon :size="20">
+          <component :is="sidebarVisible ? 'Fold' : 'Expand'" />
+        </el-icon>
+      </div>
+      <transition name="slide">
+        <el-card v-show="sidebarVisible" class="chapters-card">
+          <template #header>
+            <div class="sidebar-header">
+              <span>章节列表</span>
+              <el-icon class="close-btn" @click="sidebarVisible = false"><Close /></el-icon>
+            </div>
+          </template>
         <div class="chapters-list">
           <div v-for="section in sections" :key="section.title" class="section-group">
             <div
@@ -614,7 +642,8 @@ watch(chapters, async (newVal) => {
             </template>
           </div>
         </div>
-      </el-card>
+        </el-card>
+      </transition>
 
       <el-card class="content-card">
         <template #header>
@@ -755,11 +784,145 @@ watch(chapters, async (newVal) => {
 .content-area {
   display: flex;
   gap: 20px;
+  position: relative;
+}
+
+.sidebar-toggle {
+  position: fixed;
+  left: 10px;
+  top: 80px;
+  width: 36px;
+  height: 36px;
+  background: #409eff;
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 1000;
+  transition: all 0.3s;
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.4);
+}
+
+.sidebar-toggle:hover {
+  background: #337ecc;
+  transform: scale(1.1);
 }
 
 .chapters-card {
   width: 300px;
   flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.close-btn {
+  cursor: pointer;
+  color: #909399;
+  transition: color 0.2s;
+}
+
+.close-btn:hover {
+  color: #409eff;
+}
+
+.slide-enter-active,
+.slide-leave-active {
+  transition: all 0.3s ease;
+}
+
+.slide-enter-from,
+.slide-leave-to {
+  transform: translateX(-100%);
+  opacity: 0;
+}
+
+.sidebar-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 998;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .content-area {
+    flex-direction: column;
+  }
+
+  .sidebar-toggle {
+    position: fixed;
+    right: 16px;
+    bottom: 80px;
+    left: auto;
+    top: auto;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+    z-index: 1000;
+  }
+
+  .chapters-card {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 80%;
+    max-width: 320px;
+    z-index: 999;
+    border-radius: 0;
+    overflow-y: auto;
+  }
+
+  .slide-enter-active,
+  .slide-leave-active {
+    transition: transform 0.3s ease;
+  }
+
+  .slide-enter-from,
+  .slide-leave-to {
+    transform: translateX(-100%);
+  }
+
+  .chapters-list {
+    max-height: none;
+  }
+
+  .chapter-content {
+    max-height: none;
+  }
+
+  .page-header {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-left: 50px;
+  }
+
+  .page-header h2 {
+    width: 100%;
+    font-size: 18px;
+  }
+
+  .info-content {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .el-dialog {
+    width: 90% !important;
+    margin: 0 auto;
+  }
 }
 
 .chapters-list {
@@ -836,6 +999,7 @@ watch(chapters, async (newVal) => {
 
 .content-card {
   flex: 1;
+  min-width: 0;
 }
 
 .content-header {

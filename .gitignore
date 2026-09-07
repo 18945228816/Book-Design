@@ -37,3 +37,13 @@ backend/uploads/*
 # Database
 *.db
 *.sqlite3
+
+# Logs
+backend/logs/*
+!backend/logs/.gitkeep
+
+# Build artifacts
+*.tar.gz
+
+# Claude local settings
+.claude/
