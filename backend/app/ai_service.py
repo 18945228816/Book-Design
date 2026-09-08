@@ -144,9 +144,14 @@ def _db_config_for_model(model_key: str) -> Optional[ProviderConfig]:
 
 def _route_for_task(task_type: str, preferred_model: Optional[str] = None) -> List[ProviderConfig]:
     db_route = _db_route_for_task(task_type)
-    if db_route is not None:
+    if db_route:
         route = db_route
     else:
+        if db_route is not None:
+            logger.warning(
+                f"任务 {task_type} 在数据库配置了路由，但没有一条可用"
+                f"（供应商被禁用或未填 API Key），回退到 .env 路由"
+            )
         configs = _provider_configs()
         route_setting = settings.AI_TASK_ROUTES.get(task_type) or settings.AI_TASK_ROUTES.get("default") or []
         names = [name.strip() for name in route_setting if name.strip()]

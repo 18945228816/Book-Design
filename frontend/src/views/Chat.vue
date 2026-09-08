@@ -57,7 +57,7 @@ const loadConversations = async () => {
 
 const loadModels = async () => {
   try {
-    const res = await aiAdminApi.getModels({ type: 'chat', enabled: 1 })
+    const res = await aiAdminApi.getModels({ model_type: 'chat', enabled: true })
     availableModels.value = Array.isArray(res) ? res : (res.items || [])
   } catch {
     availableModels.value = []

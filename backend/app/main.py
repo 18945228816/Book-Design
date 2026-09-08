@@ -40,6 +40,9 @@ from .txt_parser import read_txt_file, parse_book_info, parse_chapters, flatten_
 from .email_service import generate_code, save_code, send_verification_code, verify_code
 from .logger import get_logger, get_access_logger
 
+# 日志要早于下面的建表/播种逻辑，它们会写 warning
+logger = get_logger(__name__)
+
 # 创建数据库表
 Base.metadata.create_all(bind=engine)
 
@@ -112,6 +115,39 @@ def ensure_chat_columns():
 ensure_chat_columns()
 
 
+_PURPOSE_DISPLAY_NAMES = {"文本理解", "图片生成", "图像理解", "旧版兼容模型"}
+
+_MODEL_DISPLAY_NAMES = {
+    "deepseek-v4-flash": "DeepSeek V4 Flash",
+    "deepseek-chat": "DeepSeek Chat",
+    "sensenova-u1-fast": "SenseNova U1 Fast",
+    "sensenova-6.7-flash-lite": "SenseNova 6.7 Flash Lite",
+    "qwen-plus": "通义千问 Plus",
+    "doubao-pro-32k": "豆包 Pro 32K",
+    "glm-5.1": "GLM-5.1",
+    "gpt-3.5-turbo": "GPT-3.5 Turbo",
+    "gpt-4o-mini": "GPT-4o mini",
+}
+
+
+def _model_display_name(model_key: str) -> str:
+    """Human-readable model name. Falls back to the raw key, never a purpose word."""
+    if not model_key:
+        return ""
+    return _MODEL_DISPLAY_NAMES.get(model_key, model_key)
+
+
+def _pick_default_chat_model(db):
+    """Pick an enabled chat model whose provider has an API key, default provider first."""
+    return db.query(AIModel).join(AIProvider, AIModel.provider_id == AIProvider.id).filter(
+        AIProvider.enabled == 1,
+        AIModel.enabled == 1,
+        AIModel.model_type == "chat",
+        AIProvider.api_key.isnot(None),
+        AIProvider.api_key != "",
+    ).order_by(AIProvider.is_default.desc(), AIModel.priority.asc()).first()
+
+
 def seed_ai_model_settings():
     """Seed AI management tables from .env for first-time setup."""
     from .database import SessionLocal
@@ -124,9 +160,9 @@ def seed_ai_model_settings():
             "api_key": settings.SENSENOVA_API_KEY,
             "is_default": settings.AI_DEFAULT_PROVIDER == "sensenova",
             "models": [
-                (settings.SENSENOVA_TEXT_MODEL, "chat", "文本理解", "/chat/completions"),
-                (settings.SENSENOVA_IMAGE_MODEL, "image_generation", "图片生成", "/images/generations"),
-                (settings.SENSENOVA_VISION_MODEL, "vision", "图像理解", "/chat/completions"),
+                (settings.SENSENOVA_TEXT_MODEL, "chat", _model_display_name(settings.SENSENOVA_TEXT_MODEL), "/chat/completions"),
+                (settings.SENSENOVA_IMAGE_MODEL, "image_generation", _model_display_name(settings.SENSENOVA_IMAGE_MODEL), "/images/generations"),
+                (settings.SENSENOVA_VISION_MODEL, "vision", _model_display_name(settings.SENSENOVA_VISION_MODEL), "/chat/completions"),
             ],
         },
         {
@@ -135,7 +171,7 @@ def seed_ai_model_settings():
             "base_url": settings.DEEPSEEK_BASE_URL,
             "api_key": settings.DEEPSEEK_API_KEY,
             "is_default": settings.AI_DEFAULT_PROVIDER == "deepseek",
-            "models": [(settings.DEEPSEEK_MODEL, "chat", "文本理解", "/chat/completions")],
+            "models": [(settings.DEEPSEEK_MODEL, "chat", _model_display_name(settings.DEEPSEEK_MODEL), "/chat/completions")],
         },
         {
             "provider_key": "qwen",
@@ -143,7 +179,7 @@ def seed_ai_model_settings():
             "base_url": settings.QWEN_BASE_URL,
             "api_key": settings.QWEN_API_KEY,
             "is_default": settings.AI_DEFAULT_PROVIDER == "qwen",
-            "models": [(settings.QWEN_MODEL, "chat", "文本理解", "/chat/completions")],
+            "models": [(settings.QWEN_MODEL, "chat", _model_display_name(settings.QWEN_MODEL), "/chat/completions")],
         },
         {
             "provider_key": "zhipu",
@@ -151,7 +187,7 @@ def seed_ai_model_settings():
             "base_url": settings.ZHIPU_BASE_URL,
             "api_key": settings.ZHIPU_API_KEY,
             "is_default": settings.AI_DEFAULT_PROVIDER == "zhipu",
-            "models": [(settings.ZHIPU_MODEL, "chat", "文本理解", "/chat/completions")],
+            "models": [(settings.ZHIPU_MODEL, "chat", _model_display_name(settings.ZHIPU_MODEL), "/chat/completions")],
         },
         {
             "provider_key": "doubao",
@@ -159,15 +195,23 @@ def seed_ai_model_settings():
             "base_url": settings.DOUBAO_BASE_URL,
             "api_key": settings.DOUBAO_API_KEY,
             "is_default": settings.AI_DEFAULT_PROVIDER == "doubao",
-            "models": [(settings.DOUBAO_MODEL, "chat", "文本理解", "/chat/completions")],
+            "models": [(settings.DOUBAO_MODEL, "chat", _model_display_name(settings.DOUBAO_MODEL), "/chat/completions")],
+        },
+        {
+            "provider_key": "openai",
+            "display_name": "OpenAI 兼容接口",
+            "base_url": settings.OPENAI_BASE_URL,
+            "api_key": settings.OPENAI_API_KEY,
+            "is_default": settings.AI_DEFAULT_PROVIDER == "openai",
+            "models": [(settings.OPENAI_MODEL, "chat", _model_display_name(settings.OPENAI_MODEL), "/chat/completions")],
         },
         {
             "provider_key": "legacy",
-            "display_name": "Legacy",
+            "display_name": "XTY 聚合网关",
             "base_url": settings.AI_API_BASE_URL,
             "api_key": settings.AI_API_KEY,
             "is_default": settings.AI_DEFAULT_PROVIDER == "legacy",
-            "models": [(settings.AI_MODEL, "chat", "旧版兼容模型", "/chat/completions")],
+            "models": [(settings.AI_MODEL, "chat", _model_display_name(settings.AI_MODEL), "/chat/completions")],
         },
     ]
 
@@ -216,20 +260,13 @@ def seed_ai_model_settings():
         db.commit()
 
         if db.query(AITaskRoute).count() == 0:
-            provider = db.query(AIProvider).filter(AIProvider.provider_key == "sensenova").first()
-            model = None
-            if provider:
-                model = db.query(AIModel).filter(
-                    AIModel.provider_id == provider.id,
-                    AIModel.model_key == settings.SENSENOVA_TEXT_MODEL,
-                    AIModel.model_type == "chat",
-                ).first()
-            if provider and model:
+            model = _pick_default_chat_model(db)
+            if model:
                 for task_type in ["tag_generation", "material_analysis"]:
                     db.add(AITaskRoute(
                         id=str(uuid.uuid4()),
                         task_type=task_type,
-                        provider_id=provider.id,
+                        provider_id=model.provider_id,
                         model_id=model.id,
                         route_order=1,
                         strategy="quality_first",
@@ -245,6 +282,87 @@ def seed_ai_model_settings():
 
 
 seed_ai_model_settings()
+
+
+def repair_ai_display_names():
+    """Replace purpose-word display names ('文本理解' etc.) with real model names.
+
+    Only rewrites rows still holding a seeded purpose word, so names the user
+    edited themselves are left alone.
+    """
+    from .database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        renamed = 0
+        for model in db.query(AIModel).filter(AIModel.display_name.in_(_PURPOSE_DISPLAY_NAMES)).all():
+            better = _model_display_name(model.model_key)
+            if better and better != model.display_name:
+                model.display_name = better
+                renamed += 1
+
+        legacy = db.query(AIProvider).filter(
+            AIProvider.provider_key == "legacy",
+            AIProvider.display_name == "Legacy",
+        ).first()
+        if legacy:
+            legacy.display_name = "XTY 聚合网关"
+            renamed += 1
+
+        if renamed:
+            db.commit()
+            logger.info(f"repair_ai_display_names: 修正了 {renamed} 个显示名")
+    except Exception as exc:
+        db.rollback()
+        logger.warning(f"repair_ai_display_names skipped: {exc}")
+    finally:
+        db.close()
+
+
+repair_ai_display_names()
+
+
+def repair_broken_task_routes():
+    """Repoint task routes whose provider has no usable API key.
+
+    Routes seeded from .env placeholders point at key-less providers, which makes
+    the task silently unroutable. Move those to a provider that can actually run.
+    """
+    from .database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        fallback = _pick_default_chat_model(db)
+        if not fallback:
+            return
+
+        repaired = 0
+        rows = db.query(AITaskRoute, AIProvider).join(
+            AIProvider, AITaskRoute.provider_id == AIProvider.id
+        ).filter(
+            (AIProvider.api_key.is_(None)) | (AIProvider.api_key == "")
+        ).all()
+
+        for route, provider in rows:
+            logger.warning(
+                f"任务 {route.task_type} 的路由指向未配置 API Key 的供应商 "
+                f"{provider.provider_key}，改指到 {fallback.model_key}"
+            )
+            route.provider_id = fallback.provider_id
+            route.model_id = fallback.id
+            repaired += 1
+
+        if repaired:
+            db.commit()
+            logger.info(f"repair_broken_task_routes: 修复了 {repaired} 条路由")
+    except Exception as exc:
+        db.rollback()
+        logger.warning(f"repair_broken_task_routes skipped: {exc}")
+    finally:
+        db.close()
+
+
+repair_broken_task_routes()
 
 
 def seed_chat_defaults():
@@ -321,11 +439,7 @@ def seed_chat_defaults():
 
         has_chat_route = db.query(AITaskRoute).filter(AITaskRoute.task_type == "chat_completion").first()
         if not has_chat_route:
-            model = db.query(AIModel).join(AIProvider, AIModel.provider_id == AIProvider.id).filter(
-                AIProvider.enabled == 1,
-                AIModel.enabled == 1,
-                AIModel.model_type == "chat",
-            ).order_by(AIProvider.is_default.desc(), AIModel.priority.asc()).first()
+            model = _pick_default_chat_model(db)
             if model:
                 db.add(AITaskRoute(
                     id=str(uuid.uuid4()),
@@ -359,10 +473,9 @@ app.add_middleware(
 )
 
 # ====== 日志 ======
-logger = get_logger(__name__)
 access_logger = get_access_logger()
 
-SENSITIVE_FIELDS = {"password", "passwd", "secret", "token", "authorization"}
+SENSITIVE_FIELDS = {"password", "passwd", "secret", "token", "authorization", "code"}
 
 
 def _sanitize_body(body: bytes) -> str:
@@ -792,45 +905,6 @@ class AICallLogResponse(BaseModel):
 
 # ====== AI 自动标签 ======
 async def ai_generate_tags(content: str) -> List[str]:
-    """调用 AI API 自动生成标签（单次尝试）"""
-    if not settings.AI_API_KEY:
-        return []
-
-    prompt = f"""请为以下文本内容生成3-5个标签关键词，用于分类和检索。
-要求：
-1. 标签应反映内容的主题、情感、场景或核心概念
-2. 每个标签2-4个字
-3. 只返回标签列表，用JSON数组格式，不要其他解释
-
-文本内容：
-{content[:1000]}"""
-
-    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
-        resp = await client.post(
-            f"{settings.AI_API_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {settings.AI_API_KEY}"},
-            json={
-                "model": settings.AI_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3
-            }
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        text = data["choices"][0]["message"]["content"].strip()
-        # 去除 markdown 代码块标记
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
-        tags = json.loads(text)
-        if isinstance(tags, list):
-            return [str(t).strip() for t in tags if t][:5]
-    return []
-
-
-async def ai_generate_tags(content: str) -> List[str]:
     """Generate tags through the multi-model AI gateway."""
     if not settings.AI_ANALYSIS_ENABLED:
         return []
@@ -1016,6 +1090,7 @@ async def delete_ai_provider(
 async def get_ai_models(
     provider_id: Optional[str] = None,
     model_type: Optional[str] = None,
+    enabled: Optional[bool] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -1024,6 +1099,8 @@ async def get_ai_models(
         query = query.filter(AIModel.provider_id == provider_id)
     if model_type:
         query = query.filter(AIModel.model_type == model_type)
+    if enabled is not None:
+        query = query.filter(AIModel.enabled == (1 if enabled else 0))
     models = query.order_by(AIModel.priority.asc(), AIModel.created_at.asc()).all()
     return [_model_response(model) for model in models]
 

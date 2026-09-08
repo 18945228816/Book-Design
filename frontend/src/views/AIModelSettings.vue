@@ -38,14 +38,11 @@ const modelForm = ref({
 })
 
 const taskTypes = [
+  { value: 'chat_completion', label: '对话' },
   { value: 'material_analysis', label: '素材理解' },
-  { value: 'tag_generation', label: '标签生成' },
-  { value: 'feeling_suggestion', label: '感悟候选' },
-  { value: 'chapter_summary', label: '章节摘要' },
-  { value: 'image_generation', label: '图片生成' },
-  { value: 'vision_understanding', label: '图像理解' }
+  { value: 'tag_generation', label: '标签生成' }
 ]
-const selectedTask = ref('material_analysis')
+const selectedTask = ref('chat_completion')
 const routeDraft = ref([])
 const testPrompt = ref('请只返回 JSON 数组：["测试"]')
 const testingModelId = ref('')
