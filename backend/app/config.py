@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     LOG_DIR: str = "logs"
     LOG_RETENTION_DAYS: int = 30
 
+    # 邮件发送（注册验证码）
+    SMTP_HOST: str = "smtp.qq.com"
+    SMTP_PORT: int = 465
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_NAME: str = "读书感悟记录系统"
+    CODE_EXPIRE_MINUTES: int = 10
+    CODE_RESEND_SECONDS: int = 60
+
     @property
     def AI_TASK_ROUTES(self) -> dict:
         return {

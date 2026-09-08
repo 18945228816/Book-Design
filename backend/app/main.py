@@ -2,9 +2,11 @@ from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, F
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr
+from email_validator import validate_email, EmailNotValidError
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
@@ -28,12 +30,14 @@ from .models import (
     AIModel,
     AITaskRoute,
     AICallLog,
+    EmailCode,
 )
 from .config import settings
 from .chat_router import router as chat_router
 from .ai_service import analyze_material as ai_analyze_material
 from .ai_service import generate_tags as ai_generate_tags_multi
 from .txt_parser import read_txt_file, parse_book_info, parse_chapters, flatten_chapters
+from .email_service import generate_code, save_code, send_verification_code, verify_code
 from .logger import get_logger, get_access_logger
 
 # 创建数据库表
@@ -496,9 +500,14 @@ def get_current_user(
 
 # ====== 请求/响应模型 ======
 class RegisterRequest(BaseModel):
-    email: str
+    email: EmailStr
     password: str
     username: str
+    code: str
+
+
+class SendCodeRequest(BaseModel):
+    email: EmailStr
 
 
 class LoginRequest(BaseModel):
@@ -1290,12 +1299,70 @@ async def root():
     return {"message": "API 运行正常"}
 
 
+async def _assert_email_deliverable(email: str):
+    """检查邮箱域名能否收信。DNS 超时/解析失败时库内部放行，不会误伤正常用户。
+
+    DNS 查询是阻塞 IO，放到线程池执行，避免卡住事件循环。
+    """
+    try:
+        await run_in_threadpool(validate_email, email, check_deliverability=True)
+    except EmailNotValidError as e:
+        logger.warning(f"邮箱不可用({email}): {e}")
+        raise HTTPException(status_code=400, detail="该邮箱域名不存在或无法接收邮件")
+
+
+@app.post("/api/v1/auth/send-code")
+async def send_code(req: SendCodeRequest, db: Session = Depends(get_db)):
+    await _assert_email_deliverable(req.email)
+
+    if db.query(User).filter(User.email == req.email).first():
+        raise HTTPException(status_code=400, detail="邮箱已被注册")
+
+    # 限流：同一邮箱 N 秒内只能发一次
+    recent_after = datetime.utcnow() - timedelta(seconds=settings.CODE_RESEND_SECONDS)
+    recent = (
+        db.query(EmailCode)
+        .filter(EmailCode.email == req.email, EmailCode.created_at >= recent_after)
+        .first()
+    )
+    if recent:
+        wait = settings.CODE_RESEND_SECONDS - int(
+            (datetime.utcnow() - recent.created_at).total_seconds()
+        )
+        raise HTTPException(
+            status_code=429, detail=f"发送过于频繁，请 {max(wait, 1)} 秒后重试"
+        )
+
+    code = generate_code()
+    save_code(db, req.email, code)
+
+    # SMTP 发信是阻塞 IO，放到线程池
+    try:
+        sent = await run_in_threadpool(send_verification_code, req.email, code)
+    except Exception:
+        raise HTTPException(status_code=500, detail="验证码发送失败，请稍后重试")
+
+    logger.info(f"验证码已生成: email={req.email}, 实际发送={sent}")
+    return {
+        "message": "验证码已发送" if sent else "验证码已生成（SMTP 未配置，请查看后端日志）",
+        "expire_minutes": settings.CODE_EXPIRE_MINUTES,
+    }
+
+
 @app.post("/api/v1/auth/register", response_model=TokenResponse)
 async def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    await _assert_email_deliverable(req.email)
+
     # 检查邮箱是否已存在
     if db.query(User).filter(User.email == req.email).first():
         logger.warning(f"用户注册失败: username={req.username}, 原因=邮箱已被注册({req.email})")
         raise HTTPException(status_code=400, detail="邮箱已被注册")
+
+    # 校验邮箱验证码（通过后即标记为已使用，防重放）
+    ok, err = verify_code(db, req.email, req.code)
+    if not ok:
+        logger.warning(f"用户注册失败: email={req.email}, 原因={err}")
+        raise HTTPException(status_code=400, detail=err)
 
     # 创建用户
     user = User(

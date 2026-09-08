@@ -27,6 +27,7 @@ api.interceptors.response.use(
 export const userApi = {
   register: (data) => api.post('/auth/register', data),
   login: (data) => api.post('/auth/login', data),
+  sendCode: (data) => api.post('/auth/send-code', data),
   getMe: () => api.get('/user/me')
 }
 

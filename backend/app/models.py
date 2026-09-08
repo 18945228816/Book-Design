@@ -1,6 +1,7 @@
 from sqlalchemy import Column, String, Text, Integer, DateTime, ForeignKey, Float, UniqueConstraint, func
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import relationship
+from datetime import datetime
 import uuid
 from .database import Base
 
@@ -55,6 +56,23 @@ class User(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     books = relationship("Book", back_populates="user")
+
+
+class EmailCode(Base):
+    """邮箱验证码，用后即焚，过期失效。
+
+    时间戳统一由 Python 以 UTC 写入（不用 server_default），
+    避免与 MySQL 本地时区的 NOW() 混用导致比较错误。
+    """
+    __tablename__ = "email_codes"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    email = Column(String(255), nullable=False, index=True)
+    code = Column(String(6), nullable=False)
+    purpose = Column(String(20), nullable=False, default="register")
+    used = Column(Integer, nullable=False, default=0)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class Book(Base):
