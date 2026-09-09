@@ -2,7 +2,9 @@ from sqlalchemy import Column, String, Text, Integer, DateTime, ForeignKey, Floa
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import relationship
 from datetime import datetime
+import os
 import uuid
+from .config import settings
 from .database import Base
 
 
@@ -93,7 +95,20 @@ class Book(Base):
 
     @property
     def cover_url(self):
-        return self.cover_path or None
+        """封面 URL，带文件 mtime 作为版本号：换封面后路径不变也不会用到浏览器旧缓存。"""
+        if not self.cover_path:
+            return None
+        path = self.cover_path
+        try:
+            # /uploads/covers/x.jpg -> backend/uploads/covers/x.jpg（UPLOAD_DIR 通常是 ./uploads）
+            rel = path.split("/uploads/", 1)[-1]
+            abs_path = os.path.join(settings.UPLOAD_DIR, rel)
+            if os.path.exists(abs_path):
+                mtime = int(os.path.getmtime(abs_path))
+                return f"{path}?v={mtime}"
+        except Exception:
+            pass
+        return path
 
 
 class Chapter(Base):

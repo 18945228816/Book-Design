@@ -244,8 +244,8 @@ const handleEditSave = async () => {
 
 .cover-img {
   width: 100%;
-  height: 180px;
-  object-fit: cover;
+  height: 220px;
+  object-fit: contain;
   display: block;
 }
 

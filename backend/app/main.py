@@ -1691,6 +1691,8 @@ async def get_books(
             "author": book.author,
             "file_type": book.file_type,
             "chapters_count": book.chapters_count,
+            "cover_url": book.cover_url,
+            "cover_source": book.cover_source,
             "created_at": book.created_at,
             "chapters": [{"chapter_order": ch.chapter_order, "title": ch.title} for ch in chapters]
         })

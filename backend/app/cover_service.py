@@ -21,12 +21,12 @@ from .logger import get_logger
 logger = get_logger(__name__)
 
 _WEREAD_SEARCH = "https://weread.qq.com/web/search/global"
+_DOUBAN_SUGGEST = "https://book.douban.com/j/subject_suggest"
 _COVER_DIR = os.path.join(settings.UPLOAD_DIR, "covers")
-_HTTP_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-    "Referer": "https://weread.qq.com/",
-}
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36")
+_HTTP_HEADERS = {"User-Agent": _UA, "Referer": "https://weread.qq.com/"}
+_DOUBAN_HEADERS = {"User-Agent": _UA, "Referer": "https://book.douban.com/"}
 
 
 def _cover_path(book_id: str, ext: str) -> str:
@@ -41,7 +41,55 @@ def _relative_url(abs_path: str) -> str:
     return "/" + norm[idx:] if idx >= 0 else norm
 
 
-# ---------- 1. 微信读书真实封面 ----------
+# ---------- 1. 真实封面（豆瓣高清优先，微信读书兜底）----------
+
+async def _fetch_douban_cover(client: httpx.AsyncClient, title: str, author: Optional[str]) -> Optional[bytes]:
+    """豆瓣 suggest 接口拿高清封面（约 400x569），需带 Referer 否则 418。"""
+    try:
+        resp = await client.get(
+            _DOUBAN_SUGGEST,
+            params={"q": title},
+            headers={"User-Agent": _UA},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        items = resp.json()
+    except Exception as exc:
+        logger.warning(f"豆瓣搜索失败({title}): {exc}")
+        return None
+
+    if not isinstance(items, list) or not items:
+        return None
+
+    # 只取图书（type=b），按标题/作者匹配打分
+    scored = []
+    for it in items:
+        if it.get("type") != "b":
+            continue
+        score = _score_match(title, it.get("title", ""), author or "", it.get("author_name", ""))
+        if score > 0:
+            scored.append((score, it.get("pic", "")))
+    if not scored:
+        return None
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    for _, pic in scored[:3]:
+        if not pic:
+            continue
+        # suggest 返回的是小图(s)，换成大图(l)
+        large = pic.replace("/view/subject/s/", "/view/subject/l/")
+        for url in (large, pic):
+            try:
+                img = await client.get(url, headers=_DOUBAN_HEADERS, timeout=10)
+                img.raise_for_status()
+                if img.status_code == 200 and len(img.content) >= 3000 and \
+                        img.headers.get("content-type", "").startswith("image"):
+                    logger.info(f"豆瓣命中高清封面: {title} ({len(img.content)}B)")
+                    return img.content
+            except Exception:
+                continue
+    return None
+
 
 def _score_match(title: str, candidate: str, author: str, cand_author: str) -> int:
     """标题越吻合分越高；作者也吻合额外加分。"""
@@ -68,10 +116,8 @@ def _score_match(title: str, candidate: str, author: str, cand_author: str) -> i
     return score
 
 
-async def fetch_real_cover(
-    client: httpx.AsyncClient, title: str, author: Optional[str]
-) -> Optional[bytes]:
-    """在微信读书搜真封面，下载并返回图片字节。搜不到/不吻合返回 None。"""
+async def _fetch_weread_cover(client: httpx.AsyncClient, title: str, author: Optional[str]) -> Optional[bytes]:
+    """微信读书封面（分辨率较低，作兜底）。搜索返回 s_ 小图，尽量换 b_ 大图。"""
     keyword = f"{title} {author}".strip() if author else title
     try:
         resp = await client.get(
@@ -106,15 +152,33 @@ async def fetch_real_cover(
 
     candidates.sort(key=lambda x: x[0], reverse=True)
     for _, cover_url in candidates[:3]:
-        try:
-            img = await client.get(cover_url, headers=_HTTP_HEADERS, timeout=10)
-            img.raise_for_status()
-            if len(img.content) >= 1000 and img.headers.get("content-type", "").startswith("image"):
-                logger.info(f"微信读书命中真封面: {title} ({len(img.content)}B)")
-                return img.content
-        except Exception:
-            continue
+        # s_ 是 70px 小图；同一对象尝试 b_(140px) / m_(84px)
+        bigger_urls = [
+            re.sub(r"/s_(?=[^/]+\.jpg)", "/b_", cover_url),
+            re.sub(r"/s_(?=[^/]+\.jpg)", "/m_", cover_url),
+            cover_url,
+        ]
+        for url in bigger_urls:
+            try:
+                img = await client.get(url, headers=_HTTP_HEADERS, timeout=10)
+                img.raise_for_status()
+                if img.status_code == 200 and len(img.content) >= 1000 and \
+                        img.headers.get("content-type", "").startswith("image"):
+                    logger.info(f"微信读书命中封面: {title} ({len(img.content)}B)")
+                    return img.content
+            except Exception:
+                continue
     return None
+
+
+async def fetch_real_cover(
+    client: httpx.AsyncClient, title: str, author: Optional[str]
+) -> Optional[bytes]:
+    """真实封面：豆瓣高清优先，搜不到再回退微信读书。"""
+    cover = await _fetch_douban_cover(client, title, author)
+    if cover:
+        return cover
+    return await _fetch_weread_cover(client, title, author)
 
 
 # ---------- 2. AI 生成封面 ----------

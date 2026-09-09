@@ -781,9 +781,9 @@ watch(chapters, async (newVal) => {
 }
 
 .detail-cover {
-  width: 100px;
-  height: 140px;
-  object-fit: cover;
+  width: 140px;
+  height: 200px;
+  object-fit: contain;
   border-radius: 4px;
   flex-shrink: 0;
 }
