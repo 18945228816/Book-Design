@@ -135,7 +135,8 @@ const handleEditSave = async () => {
       <div v-else class="books-grid">
         <el-card v-for="book in books" :key="book.id" shadow="hover" class="book-card">
           <div class="book-cover">
-            <img src="/书封面.webp" alt="封面" class="cover-img" />
+            <img :src="book.cover_url || '/书封面.webp'" alt="封面" class="cover-img"
+                 @error="(e) => { e.target.src = '/书封面.webp' }" />
           </div>
           <div class="book-info">
             <h3 class="book-title">{{ book.title }}</h3>

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import inspect, text
@@ -15,6 +16,7 @@ import uuid
 import os
 import json
 import time
+import asyncio
 import traceback
 import httpx
 
@@ -37,6 +39,7 @@ from .chat_router import router as chat_router
 from .ai_service import analyze_material as ai_analyze_material
 from .ai_service import generate_tags as ai_generate_tags_multi
 from .ai_service import extract_book_info as ai_extract_book_info
+from .cover_service import acquire_cover, create_cover_preview, promote_cover_preview, VALID_METHODS
 from .txt_parser import read_txt_file, parse_book_info, parse_chapters, flatten_chapters
 from .email_service import generate_code, save_code, send_verification_code, verify_code
 from .logger import get_logger, get_access_logger
@@ -114,6 +117,25 @@ def ensure_chat_columns():
 
 
 ensure_chat_columns()
+
+
+def ensure_book_cover_columns():
+    """Add cover columns to books for existing databases without Alembic."""
+    try:
+        inspector = inspect(engine)
+        if not inspector.has_table("books"):
+            return
+        existing = {col["name"] for col in inspector.get_columns("books")}
+        with engine.begin() as conn:
+            if "cover_path" not in existing:
+                conn.execute(text("ALTER TABLE books ADD COLUMN cover_path VARCHAR(500) NULL"))
+            if "cover_source" not in existing:
+                conn.execute(text("ALTER TABLE books ADD COLUMN cover_source VARCHAR(20) NULL"))
+    except Exception as exc:
+        logger.warning(f"ensure_book_cover_columns skipped: {exc}")
+
+
+ensure_book_cover_columns()
 
 
 _PURPOSE_DISPLAY_NAMES = {"文本理解", "图片生成", "图像理解", "旧版兼容模型"}
@@ -473,8 +495,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ====== 静态文件（封面等上传资源）======
+_uploads_dir = os.path.abspath(settings.UPLOAD_DIR)
+os.makedirs(os.path.join(_uploads_dir, "covers"), exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")
+
 # ====== 日志 ======
 access_logger = get_access_logger()
+
+
+def backfill_missing_covers():
+    """启动时给没有封面的存量书补封面（真封面→AI→本地），守护线程执行不阻塞启动。"""
+    import asyncio
+    import threading
+
+    def _run():
+        try:
+            from .database import SessionLocal
+            db = SessionLocal()
+            try:
+                books = db.query(Book).filter(
+                    (Book.cover_path.is_(None)) | (Book.cover_path == "")
+                ).all()
+                targets = [(b.id, b.title, b.author) for b in books]
+            finally:
+                db.close()
+
+            if not targets:
+                return
+
+            async def _all():
+                for book_id, title, author in targets:
+                    await fetch_and_store_cover(book_id, title, author)
+
+            logger.info(f"开始为 {len(targets)} 本存量书补封面")
+            asyncio.run(_all())
+            logger.info("存量书封面补全完成")
+        except Exception as exc:
+            logger.warning(f"backfill_missing_covers skipped: {exc}")
+
+    threading.Thread(target=_run, daemon=True, name="cover-backfill").start()
+
+
+@app.on_event("startup")
+def _schedule_cover_backfill():
+    # 启动事件在模块完全加载后触发，此时 fetch_and_store_cover 已定义
+    backfill_missing_covers()
 
 SENSITIVE_FIELDS = {"password", "passwd", "secret", "token", "authorization", "code"}
 
@@ -666,6 +732,8 @@ class BookResponse(BaseModel):
     author: Optional[str]
     file_type: str
     chapters_count: int
+    cover_url: Optional[str] = None
+    cover_source: Optional[str] = None
     created_at: datetime
     chapters: List[ChapterBrief] = []
 
@@ -1488,11 +1556,32 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 
 # ====== 书籍路由 ======
+async def fetch_and_store_cover(book_id: str, title: str, author: Optional[str], use_ai: bool = True):
+    """后台获取封面（真封面→AI→本地）并写回数据库。任何失败都不影响书籍本身。"""
+    try:
+        cover_url, source = await acquire_cover(book_id, title, author, use_ai=use_ai)
+        if not cover_url:
+            return
+        from .database import SessionLocal
+        db = SessionLocal()
+        try:
+            book = db.query(Book).filter(Book.id == book_id).first()
+            if book:
+                book.cover_path = cover_url
+                book.cover_source = source
+                db.commit()
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning(f"后台获取封面失败(book={book_id}): {exc}")
+
+
 @app.post("/api/v1/books", response_model=BookResponse, status_code=201)
 async def upload_book(
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
     author: Optional[str] = Form(None),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -1569,6 +1658,8 @@ async def upload_book(
             f"filename={file.filename}, file_size={len(file_bytes)}, "
             f"chapters={len(chapters_data)}, user={current_user.username}"
         )
+        # 后台获取封面（真封面→AI→本地），不阻塞响应
+        background_tasks.add_task(fetch_and_store_cover, book.id, book_title, book_author)
         return book
 
     except HTTPException:
@@ -1649,6 +1740,86 @@ async def update_book(
     db.commit()
     db.refresh(book)
     return book
+
+
+class CoverPreviewResponse(BaseModel):
+    method: str
+    available: bool
+    preview_url: Optional[str] = None
+    message: Optional[str] = None
+
+
+@app.post("/api/v1/books/{book_id}/cover/preview", response_model=CoverPreviewResponse)
+async def preview_book_cover(
+    book_id: str,
+    method: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """用指定方式（real/ai/local）生成封面预览，不改变当前封面。"""
+    if method not in VALID_METHODS:
+        raise HTTPException(status_code=400, detail="method 必须是 real / ai / local 之一")
+    book = db.query(Book).filter(
+        Book.id == book_id,
+        Book.user_id == current_user.id
+    ).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="书籍不存在")
+
+    preview_url, _ = await create_cover_preview(book_id, book.title, book.author, method)
+    if not preview_url:
+        if method == "real":
+            msg = "没有在微信读书找到匹配的真实封面"
+        elif method == "ai":
+            msg = "AI 图片模型暂不可用（未配置 Key 或渠道异常）"
+        else:
+            msg = "本地封面生成失败"
+        return CoverPreviewResponse(method=method, available=False, message=msg)
+    return CoverPreviewResponse(
+        method=method,
+        available=True,
+        preview_url=f"{preview_url}?t={int(time.time())}",
+    )
+
+
+@app.post("/api/v1/books/{book_id}/cover", response_model=BookResponse)
+async def set_book_cover(
+    book_id: str,
+    method: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """采用此前用指定方式生成的预览封面为正式封面。"""
+    if method not in VALID_METHODS:
+        raise HTTPException(status_code=400, detail="method 必须是 real / ai / local 之一")
+    book = db.query(Book).filter(
+        Book.id == book_id,
+        Book.user_id == current_user.id
+    ).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="书籍不存在")
+
+    cover_url = await asyncio.to_thread(promote_cover_preview, book_id, method)
+    if not cover_url:
+        raise HTTPException(status_code=400, detail="该方式还没有可用预览，请先生成")
+    book.cover_path = cover_url
+    book.cover_source = method
+    db.commit()
+    db.refresh(book)
+    # 响应里的图片 URL 带时间戳防浏览器缓存，数据库仍存规范路径
+    busted = f"{cover_url}?t={int(time.time())}"
+    return {
+        "id": book.id,
+        "title": book.title,
+        "author": book.author,
+        "file_type": book.file_type,
+        "chapters_count": book.chapters_count,
+        "cover_url": busted,
+        "cover_source": method,
+        "created_at": book.created_at,
+        "chapters": [{"chapter_order": c.chapter_order, "title": c.title}
+                     for c in (book.chapters or [])],
+    }
 
 
 def _get_owned_book_or_404(book_id: str, current_user: User, db: Session) -> Book:

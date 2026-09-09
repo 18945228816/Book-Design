@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     AI_MODEL: str = "gpt-3.5-turbo"
     AI_ANALYSIS_ENABLED: bool = True
     AI_REQUEST_TIMEOUT: int = 30
+    AI_IMAGE_MODEL: str = "gpt-image-1"
+    UPLOAD_DIR: str = "./uploads"
     AI_DEFAULT_PROVIDER: str = "sensenova"
     AI_TASK_ROUTE_DEFAULT: str = "sensenova,zhipu,deepseek,qwen,doubao,openai,legacy"
     AI_TASK_ROUTE_TAG_GENERATION: str = "sensenova,zhipu,qwen,deepseek,doubao,openai,legacy"

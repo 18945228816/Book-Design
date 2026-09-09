@@ -42,6 +42,14 @@ export const bookApi = {
   }),
   delete: (id) => api.delete(`/books/${id}`),
   update: (id, data) => api.patch(`/books/${id}`, data),
+  coverPreview: (id, method) => api.post(`/books/${id}/cover/preview`, null, {
+    params: { method },
+    timeout: 120000
+  }),
+  setCover: (id, method) => api.post(`/books/${id}/cover`, null, {
+    params: { method },
+    timeout: 60000
+  }),
   updateChapters: (bookId, chapters) => api.put(`/books/${bookId}/chapters`, { chapters }),
   getReadingProgress: (bookId) => api.get(`/books/${bookId}/reading-progress`),
   saveReadingProgress: (bookId, data) => api.put(`/books/${bookId}/reading-progress`, data)

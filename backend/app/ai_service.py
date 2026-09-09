@@ -1,6 +1,8 @@
 import json
+import os
 import time
 import uuid
+import asyncio
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
@@ -536,3 +538,206 @@ async def extract_book_info(head_text: str) -> Dict[str, str]:
             result["author"] = author
     logger.info(f"AI识别书名作者完成: provider={provider}, model={model}, result={result}")
     return result
+
+
+def _image_config() -> Optional[ProviderConfig]:
+    """Resolve an image-generation model.
+
+    Order: explicit SenseNova env (sensenova-u1-fast) → a DB model of type
+    image_generation under a provider with a key → OpenAI-compatible gateway.
+    """
+    # 显式优先：SenseNova 日日新图片模型
+    if settings.SENSENOVA_API_KEY and settings.SENSENOVA_IMAGE_MODEL:
+        return ProviderConfig(
+            "sensenova",
+            settings.SENSENOVA_API_KEY,
+            settings.SENSENOVA_BASE_URL,
+            settings.SENSENOVA_IMAGE_MODEL,
+            timeout=120,
+            endpoint_path="/images/generations",
+        )
+
+    try:
+        from .database import SessionLocal
+        from .models import AIProvider, AIModel
+    except Exception:
+        return None
+
+    db = SessionLocal()
+    try:
+        row = db.query(AIProvider, AIModel).join(
+            AIModel, AIModel.provider_id == AIProvider.id
+        ).filter(
+            AIModel.model_type == "image_generation",
+            AIModel.enabled == 1,
+            AIProvider.enabled == 1,
+            AIProvider.api_key.isnot(None),
+            AIProvider.api_key != "",
+        ).order_by(AIProvider.is_default.desc(), AIModel.priority.asc()).first()
+        if row:
+            provider, model = row
+            return ProviderConfig(
+                name=provider.provider_key,
+                api_key=provider.api_key,
+                base_url=provider.base_url,
+                model=model.model_key,
+                timeout=120,
+                endpoint_path=model.endpoint_path or "/images/generations",
+            )
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+    # 兜底：走 OPENAI_* / legacy 网关
+    if settings.OPENAI_API_KEY:
+        return ProviderConfig("openai", settings.OPENAI_API_KEY, settings.OPENAI_BASE_URL,
+                              settings.AI_IMAGE_MODEL, timeout=120,
+                              endpoint_path="/images/generations")
+    if settings.AI_API_KEY:
+        return ProviderConfig("legacy", settings.AI_API_KEY, settings.AI_API_BASE_URL,
+                              settings.AI_IMAGE_MODEL, timeout=120,
+                              endpoint_path="/images/generations")
+    return None
+
+
+def _overlay_cover_text(image_bytes: bytes, title: str, author: Optional[str]) -> bytes:
+    """在 AI 插画顶部用 Pillow 叠加准确的书名/作者（中文不会出错）。
+
+    图片模型可能仍在画面里画出错误文字，所以顶部用不透明面板完全盖住，
+    书名/作者排在面板内，中下部保留 AI 插画。
+    """
+    from io import BytesIO
+    from PIL import Image, ImageDraw, ImageFont
+
+    art = Image.open(BytesIO(image_bytes)).convert("RGB")
+    W, H = art.size
+
+    fonts_dir = "C:/Windows/Fonts"
+    def font(name, size):
+        try:
+            return ImageFont.truetype(os.path.join(fonts_dir, name), size)
+        except Exception:
+            return ImageFont.load_default()
+
+    margin = int(W * 0.1)
+    title = (title or "未命名").strip()
+    author = (author or "").strip()
+    tfont = font("msyhbd.ttc", max(54, int(W * 0.085)))
+
+    probe = Image.new("RGB", (10, 10))
+    pdraw = ImageDraw.Draw(probe)
+
+    def wrap(text, f, max_w):
+        lines, cur = [], ""
+        for ch in text:
+            if pdraw.textlength(cur + ch, font=f) <= max_w:
+                cur += ch
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = ch
+        if cur:
+            lines.append(cur)
+        return lines[:2]
+
+    lines = wrap(title, tfont, W - 2 * margin)
+    line_h = int(tfont.size * 1.25)
+    afont = font("msyh.ttc", max(32, int(W * 0.045)))
+    block_h = len(lines) * line_h + (int(afont.size * 1.8) if author else int(tfont.size * 0.5))
+    panel_h = block_h + int(H * 0.09)
+
+    # 顶部不透明深色面板（从插画取一个主色调，避免太突兀）
+    sample = art.crop((0, 0, W, max(1, int(H * 0.05)))).resize((1, 1)).getpixel((0, 0))
+    panel_color = tuple(max(0, c - 60) for c in sample[:3])
+    panel = Image.new("RGB", (W, panel_h), panel_color)
+    art.paste(panel, (0, 0))
+    draw = ImageDraw.Draw(art)
+
+    # 面板底边一条金色分隔线
+    gold = (201, 169, 110)
+    draw.rectangle([0, panel_h - 3, W, panel_h], fill=gold)
+
+    y = (panel_h - block_h) // 2
+    for line in lines:
+        tw = draw.textlength(line, font=tfont)
+        x = (W - tw) / 2
+        draw.text((x, y), line, font=tfont, fill=(255, 255, 255))
+        y += line_h
+
+    if author:
+        at = f"—— {author}"
+        aw = draw.textlength(at, font=afont)
+        draw.text(((W - aw) / 2, y + int(tfont.size * 0.15)), at, font=afont, fill=(225, 222, 214))
+
+    out = BytesIO()
+    art.save(out, format="JPEG", quality=90)
+    return out.getvalue()
+
+
+async def generate_cover_image(title: str, author: Optional[str] = None) -> Optional[bytes]:
+    """Generate a decorative book cover via the gateway's image model.
+
+    AI 只负责无字插画，书名/作者由本地 Pillow 叠加，保证中文准确。
+    返回 JPEG 字节；无可用图片模型或调用失败时返回 None，不抛异常。
+    """
+    cfg = _image_config()
+    if not cfg:
+        logger.warning("生成封面失败：没有可用的图片模型/API Key")
+        return None
+
+    if cfg.name == "sensenova":
+        # 让模型只画无字背景：它直接排中文容易错字/重复，文字改由本地叠加
+        prompt = (
+            f"一张竖版精装书封面的背景插画，主题：{title}。"
+            "精致的数字插画或国风艺术风格，意境深远，构图讲究。"
+            "画面上方约三分之一是简洁柔和的纯色背景（将被书名条覆盖），"
+            "主体场景和视觉焦点集中在画面下方三分之二。"
+            "整幅画面铺满、无任何文字、无标题、无字母、无水印、无 logo、无边框。"
+        )
+    else:
+        prompt = (
+            f"一张精装书籍封面背景插画，竖版构图，主题：{title}。"
+            "精致的插画或抽象艺术风格，典雅配色，画面铺满，"
+            "上半部分简洁留白，无任何文字、标题、字母、水印。"
+        )
+    payload: Dict[str, Any] = {
+        "model": cfg.model,
+        "prompt": prompt,
+        "n": 1,
+    }
+    if cfg.name == "sensenova":
+        # sensenova-u1-fast：竖版 2:3，关闭官方水印
+        payload["size"] = "1664x2496"
+        payload["watermark"] = False
+    else:
+        payload["size"] = "1024x1024"
+    url = f"{cfg.base_url.rstrip('/')}{cfg.endpoint_path or '/images/generations'}"
+    headers = {"Authorization": f"Bearer {cfg.api_key}"}
+    try:
+        async with httpx.AsyncClient(timeout=cfg.timeout or 120, trust_env=False) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+        item = (data.get("data") or [{}])[0]
+        raw = None
+        if item.get("b64_json"):
+            import base64
+            raw = base64.b64decode(item["b64_json"])
+        elif item.get("url"):
+            async with httpx.AsyncClient(timeout=60, trust_env=False, follow_redirects=True) as client:
+                img = await client.get(item["url"])
+                img.raise_for_status()
+                raw = img.content
+        if not raw:
+            logger.warning(f"生成封面失败：图片模型 {cfg.model} 返回无数据")
+            return None
+        try:
+            return await asyncio.to_thread(_overlay_cover_text, raw, title, author)
+        except Exception as overlay_exc:
+            # 文字叠加失败时至少返回原图
+            logger.warning(f"封面文字叠加失败，返回原图: {overlay_exc}")
+            return raw
+    except Exception as exc:
+        logger.warning(f"生成封面失败({cfg.name}/{cfg.model}): {exc}")
+        return None

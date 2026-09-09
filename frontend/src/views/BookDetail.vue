@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { bookApi, materialApi } from '../api'
 import ReadingSelectionToolbar from '../components/ReadingSelectionToolbar.vue'
 import MaterialQuickCreateDialog from '../components/MaterialQuickCreateDialog.vue'
+import CoverPickerDialog from '../components/CoverPickerDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,6 +18,7 @@ const currentChapter = ref(null)
 const expandedSections = ref({})
 const sidebarVisible = ref(true)
 const isMobile = ref(window.innerWidth <= 768)
+const coverPickerVisible = ref(false)
 
 const materialDialogVisible = ref(false)
 const materialForm = ref({
@@ -151,6 +153,10 @@ const fetchBook = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const handleCoverApplied = (updated) => {
+  book.value = { ...book.value, cover_url: updated.cover_url, cover_source: updated.cover_source }
 }
 
 const toggleSidebar = () => {
@@ -581,12 +587,21 @@ watch(chapters, async (newVal) => {
       <el-button @click="router.push('/')" icon="HomeFilled">首页</el-button>
       <el-button @click="handleBack" icon="ArrowLeft">返回</el-button>
       <h2 v-if="book">{{ book.title }}</h2>
+      <el-button v-if="book" @click="coverPickerVisible = true">换封面</el-button>
       <el-button v-if="book" type="warning" @click="router.push(`/books/${bookId}/edit`)">编辑章节</el-button>
     </div>
 
+    <CoverPickerDialog
+      v-model="coverPickerVisible"
+      :book-id="bookId"
+      :current-cover-url="book?.cover_url || ''"
+      @applied="handleCoverApplied"
+    />
+
     <el-card v-if="book" class="info-card">
       <div class="info-content">
-        <img src="/书封面.webp" alt="封面" class="detail-cover" />
+        <img :src="book.cover_url || '/书封面.webp'" alt="封面" class="detail-cover"
+             @error="(e) => { e.target.src = '/书封面.webp' }" />
         <div class="book-meta">
           <h3 class="detail-title">{{ book.title }}</h3>
           <p><strong>作者：</strong>{{ book.author || '未知' }}</p>

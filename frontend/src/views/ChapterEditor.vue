@@ -3,10 +3,14 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { bookApi } from '../api'
+import CoverPickerDialog from '../components/CoverPickerDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
 const bookId = route.params.id
+
+const coverPickerVisible = ref(false)
+const currentCoverUrl = ref('')
 
 const book = ref(null)
 const bookTitle = ref('')
@@ -31,6 +35,7 @@ onMounted(async () => {
     book.value = res
     bookTitle.value = res.title || ''
     bookAuthor.value = res.author || ''
+    currentCoverUrl.value = res.cover_url || ''
     chapters.value = (res.chapters || []).map(ch => ({
       title: ch.title,
       content: '', // 先不加载内容，选中时再加载
@@ -334,6 +339,12 @@ const handleSkip = () => {
 const handleBack = () => {
   router.push('/books')
 }
+
+// 封面选择弹窗应用后，更新本地缓存的封面
+const handleCoverApplied = (updated) => {
+  currentCoverUrl.value = updated.cover_url
+  if (book.value) book.value.cover_url = updated.cover_url
+}
 </script>
 
 <template>
@@ -353,10 +364,20 @@ const handleBack = () => {
         </div>
       </div>
       <div class="toolbar-right">
+        <el-button @click="coverPickerVisible = true">
+          更换封面
+        </el-button>
         <el-button @click="handleSkip">跳过，直接阅读</el-button>
         <el-button type="primary" @click="handleSave" :loading="saving">保存修改</el-button>
       </div>
     </div>
+
+    <CoverPickerDialog
+      v-model="coverPickerVisible"
+      :book-id="bookId"
+      :current-cover-url="currentCoverUrl"
+      @applied="handleCoverApplied"
+    />
 
     <div class="editor-body">
       <!-- 左侧：章节列表 -->

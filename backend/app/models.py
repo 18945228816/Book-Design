@@ -84,10 +84,16 @@ class Book(Base):
     author = Column(String(200))
     file_type = Column(String(10), nullable=False)
     chapters_count = Column(Integer, default=0)
+    cover_path = Column(String(500), nullable=True)  # /uploads/covers/<id>.jpg
+    cover_source = Column(String(20), nullable=True)  # real / ai / local
     created_at = Column(DateTime, server_default=func.now())
 
     user = relationship("User", back_populates="books")
     chapters = relationship("Chapter", back_populates="book", order_by="Chapter.chapter_order")
+
+    @property
+    def cover_url(self):
+        return self.cover_path or None
 
 
 class Chapter(Base):
