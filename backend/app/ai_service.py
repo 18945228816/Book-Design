@@ -492,3 +492,47 @@ async def analyze_material(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], str
 
     logger.info(f"AI分析素材完成: provider={provider}, model={model}")
     return data, provider, model
+
+
+async def extract_book_info(head_text: str) -> Dict[str, str]:
+    """Ask AI to read the opening of a book and return {"title": ..., "author": ...}.
+
+    Used as a fallback when rule-based parse_book_info has low confidence.
+    Any failure (no provider, timeout, bad JSON) returns an empty dict —
+    callers must treat this as best-effort and never let it block upload.
+    """
+    head_text = (head_text or "").strip()[:1500]
+    if not head_text:
+        return {}
+
+    prompt = f"""请阅读下面这段小说/TXT 书籍的开头，判断这本书的书名和作者。
+
+要求：
+1. 只返回 JSON 对象：{{"title": "书名", "author": "作者"}}
+2. 判断不出来的字段返回空字符串，不要编造。
+3. 不要把章节标题（如「第一章 xxx」）当成书名。
+4. 如果开头是「书名 作者：xxx」这种形式，正确拆成两个字段。
+
+书籍开头：
+{head_text}
+"""
+    try:
+        data, provider, model = await _chat_json(
+            "book_info_extraction",
+            [{"role": "user", "content": prompt}],
+            temperature=0.1,
+        )
+    except Exception as exc:
+        logger.warning(f"AI识别书名作者失败，回退到规则/文件名: {exc}")
+        return {}
+
+    result: Dict[str, str] = {}
+    if isinstance(data, dict):
+        title = str(data.get("title") or "").strip().strip("《》 ")[:100]
+        author = str(data.get("author") or "").strip()[:30]
+        if title:
+            result["title"] = title
+        if author:
+            result["author"] = author
+    logger.info(f"AI识别书名作者完成: provider={provider}, model={model}, result={result}")
+    return result

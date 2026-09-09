@@ -36,6 +36,7 @@ from .config import settings
 from .chat_router import router as chat_router
 from .ai_service import analyze_material as ai_analyze_material
 from .ai_service import generate_tags as ai_generate_tags_multi
+from .ai_service import extract_book_info as ai_extract_book_info
 from .txt_parser import read_txt_file, parse_book_info, parse_chapters, flatten_chapters
 from .email_service import generate_code, save_code, send_verification_code, verify_code
 from .logger import get_logger, get_access_logger
@@ -1513,10 +1514,22 @@ async def upload_book(
         # 解析文件
         content = read_txt_file(file_bytes)
 
-        # 提取书籍信息
+        # 提取书籍信息（规则优先；用户没显式填且规则低置信时，AI 读开头兜底）
         book_info = parse_book_info(content)
-        book_title = title or book_info.get("title") or file.filename.replace('.txt', '')
-        book_author = author or book_info.get("author")
+        rule_title = book_info.get("title") or ""
+        rule_author = book_info.get("author") or ""
+        ai_title, ai_author = "", ""
+
+        if (not title and not author) and book_info.get("confidence") == "low":
+            try:
+                ai_info = await ai_extract_book_info(content[:1500])
+                ai_title = ai_info.get("title") or ""
+                ai_author = ai_info.get("author") or ""
+            except Exception as ai_exc:
+                logger.warning(f"AI识别书名作者失败，忽略: {ai_exc}")
+
+        book_title = title or rule_title or ai_title or file.filename.replace('.txt', '')
+        book_author = author or rule_author or ai_author or None
 
         # 解析章节（树形结构）
         chapters_tree = parse_chapters(content)
@@ -1788,49 +1801,6 @@ async def delete_book(
     db.commit()
 
     logger.info(f"删除书籍成功: book_id={book_id}, title={book.title}, user={current_user.username}")
-
-
-@app.put("/api/v1/books/{book_id}/chapters")
-async def update_chapters(
-    book_id: str,
-    req: ChaptersUpdateRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """批量更新章节（编辑器保存）"""
-    book = db.query(Book).filter(
-        Book.id == book_id,
-        Book.user_id == current_user.id
-    ).first()
-
-    if not book:
-        raise HTTPException(status_code=404, detail="书籍不存在")
-
-    try:
-        # 删除旧章节
-        db.query(Chapter).filter(Chapter.book_id == book_id).delete()
-
-        # 创建新章节
-        for idx, ch in enumerate(req.chapters):
-            chapter = Chapter(
-                id=str(uuid.uuid4()),
-                book_id=book_id,
-                title=ch.title,
-                content=ch.content,
-                chapter_order=idx + 1,
-                level=ch.level,
-                parent_title=ch.parent_title
-            )
-            db.add(chapter)
-
-        book.chapters_count = len(req.chapters)
-        db.commit()
-        db.refresh(book)
-        return book
-
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
 
 
 @app.get("/api/v1/books/{book_id}/chapters/{chapter_order}")

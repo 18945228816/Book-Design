@@ -101,26 +101,30 @@ const sections = computed(() => {
   }
 
   const result = []
-  let current = null
   for (const ch of chs) {
     if (ch.level === 0 || ch.level === 1) {
-      current = {
+      result.push({
         title: ch.title,
         chapter_order: ch.chapter_order,
         children: [],
         hasOwnContent: ch.level === 0
+      })
+    } else if (ch.level === 2) {
+      // 只有 parent_title 指向某个一级节点时才算它的子章；
+      // 前言/序章这类独立辅文和没有父级的章节各自成节
+      const parent = ch.parent_title
+        ? result.find(s => s.title === ch.parent_title)
+        : null
+      if (parent) {
+        parent.children.push(ch)
+      } else {
+        result.push({
+          title: ch.title,
+          chapter_order: ch.chapter_order,
+          children: [],
+          hasOwnContent: true
+        })
       }
-      result.push(current)
-    } else if (current) {
-      current.children.push(ch)
-    } else {
-      current = {
-        title: ch.title,
-        chapter_order: ch.chapter_order,
-        children: [],
-        hasOwnContent: true
-      }
-      result.push(current)
     }
   }
 

@@ -53,43 +53,139 @@ def strip_redundant_leading_title(content: str, title: str) -> str:
     return '\n'.join(lines).strip()
 
 
+# 明显不是书名的行：章节标题、栏目名、分隔线、纯数字
+_CHAPTER_HEADING_RE = re.compile(
+    r'^(?:'
+    r'第[一二三四五六七八九十百千万零\d]+\s*[章节卷部回节篇集]'  # 第X章/节/卷...
+    r'|序章|序篇|序言|前言|后记|尾声|楔子|引子|附录'
+    r'|chapter\s*\d+'
+    r'|part\s*\d+'
+    r'|[一二三四五六七八九十百千万]+'
+    r'|\d{1,3}'
+    r')\b',
+    re.IGNORECASE,
+)
+_BOILERPLATE_TITLES = {
+    "简介", "内容简介", "作品简介", "内容介绍", "目录", "目 录",
+    "书名", "作者", "书名作者",
+}
+_SEPARATOR_RE = re.compile(r'^[=\-*_·．。\s]{3,}$')
+
+# 同行出现「书名 + 作者」时的切分标记
+_AUTHOR_INLINE_RE = re.compile(
+    r'(?P<title>.{1,80}?)\s*'
+    r'(?:作者|著者|编著|主编)\s*[：:]\s*'
+    r'(?P<author>[\w·\-]{1,30})'
+)
+_AUTHOR_SUFFIX_RE = re.compile(
+    r'(?P<title>.{1,80}?)\s*[-—_]\s*(?P<author>[\w·\-]{1,30})\s*(?:著|编|作品)?\s*$'
+)
+_AUTHOR_MARKED_RE = re.compile(
+    r'(?:作者|著者|原著)\s*[：:]\s*(?P<author>[^\s，,、/（()\n]{1,30})'
+)
+_AUTHOR_BARE_RE = re.compile(
+    r'(?P<author>[\w·\-]{1,30})\s*(?:著|编著|主编)\s*$',
+    re.MULTILINE,
+)
+_BOOK_TITLE_MARKS_RE = re.compile(r'《\s*([^《》\n]{1,80})\s*》')
+_INVALID_AUTHORS = {"佚名", "未知", "不详", "无", "网络", "网络作者", "作者"}
+
+
+def _clean_author(raw: str) -> str:
+    """清理一行里提取出来的作者名。"""
+    author = raw.strip().strip('《》"\'“”‘’ ')
+    author = re.split(r'[\n,，、/]', author)[0].strip()
+    if not author or author in _INVALID_AUTHORS or len(author) > 20:
+        return ""
+    return author
+
+
+def _looks_like_heading(line: str) -> bool:
+    if _SEPARATOR_RE.match(line):
+        return True
+    if line in _BOILERPLATE_TITLES:
+        return True
+    if _CHAPTER_HEADING_RE.match(line):
+        return True
+    return False
+
+
 def parse_book_info(content: str) -> Dict[str, str]:
     """
-    从书籍开头提取元信息（书名、作者）
+    从书籍开头提取元信息（书名、作者），尽量不把作者或章节标题误当书名。
+
+    返回 {"title": "", "author": "", "confidence": "high"|"low"}。
+    confidence=high 表示书名来自《》或首行明确、作者来自显式标记。
 
     常见格式：
-    - 书名\n作者：xxx
-    - 《书名》\n作者：xxx
+    - 书名\\n作者：xxx
+    - 《书名》\\n作者：xxx
+    - 书名 作者：xxx（同一行）
+    - 书名 - 余华 著
     """
-    info = {"title": "", "author": ""}
+    info = {"title": "", "author": "", "confidence": "low", "title_source": ""}
 
-    # 取前500字符来提取信息
-    header = content[:500]
+    header = content[:1000]
+    lines = [line.lstrip('﻿').strip() for line in header.split('\n') if line.strip()]
+    if not lines:
+        return info
 
-    # 提取作者
-    author_patterns = [
-        r'作者[：:]\s*(.+)',
-        r'著者[：:]\s*(.+)',
-        r'作者[：:]?(.+)',
-    ]
+    # ---- 作者：要求显式标记，避免「作者」后面吞任意内容 ----
+    marked = _AUTHOR_MARKED_RE.search(header)
+    if marked:
+        info["author"] = _clean_author(marked.group("author"))
+    if not info["author"]:
+        bare = _AUTHOR_BARE_RE.search(header)
+        if bare:
+            info["author"] = _clean_author(bare.group("author"))
 
-    for pattern in author_patterns:
-        match = re.search(pattern, header)
-        if match:
-            author = match.group(1).strip()
-            # 清理作者名（去掉多余内容）
-            author = re.split(r'[\n,，、]', author)[0].strip()
-            if len(author) <= 20:
-                info["author"] = author
+    def _set_title(candidate: str, source: str) -> None:
+        candidate = re.sub(r'^书名\s*[：:]\s*', '', candidate).strip().strip(' 《》')
+        if candidate and not _looks_like_heading(candidate):
+            info["title"] = candidate[:100]
+            info["title_source"] = source
+
+    # ---- 书名 ----
+    # 1) 《书名号》最可靠
+    title_marks = _BOOK_TITLE_MARKS_RE.search(header)
+    if title_marks:
+        _set_title(title_marks.group(1), "marks")
+
+    # 2) 首行可能是「书名 作者：X」或「书名 - 余华 著」
+    if not info["title"]:
+        first = lines[0]
+        inline = _AUTHOR_INLINE_RE.match(first)
+        if inline:
+            _set_title(inline.group("title"), "inline")
+            if info["title"] and not info["author"]:
+                info["author"] = _clean_author(inline.group("author"))
+        else:
+            suffix = _AUTHOR_SUFFIX_RE.match(first)
+            if suffix and not _CHAPTER_HEADING_RE.match(suffix.group("title")):
+                _set_title(suffix.group("title"), "inline")
+                if info["title"] and not info["author"]:
+                    info["author"] = _clean_author(suffix.group("author"))
+
+    # 3) 前几行里第一个像书名的短行（短、无句读标点、不是章节标题/正文句子）
+    def _title_like(line: str) -> bool:
+        if len(line) > 25 or not line:
+            return False
+        return not bool(re.search(r'[。！？，；…]', line))
+
+    if not info["title"]:
+        for line in lines[:5]:
+            if not _looks_like_heading(line) and _title_like(line):
+                _set_title(line, "firstline")
                 break
 
-    # 提取书名（第一行非空内容）
-    lines = [line.strip() for line in content.split('\n') if line.strip()]
-    if lines:
-        first_line = lines[0]
-        # 去掉可能的分隔符
-        if not re.match(r'^[=]{3,}$|^[*]{3,}$|^[-]{3,}$', first_line):
-            info["title"] = first_line[:100]
+    # title_source 为 marks/inline/firstline 时才高置信；
+    # 首行是章节标题的书（正文直接从「第X章」开始）没有可靠书名，留空交给文件名/AI。
+    if info["title"] and info["title_source"] in {"marks", "inline", "firstline"}:
+        info["confidence"] = "high"
+    else:
+        info["title"] = ""
+        info["title_source"] = ""
+        info["confidence"] = "low"
 
     return info
 
@@ -166,10 +262,10 @@ def find_chapter_splits(content: str) -> List[dict]:
     # 预扫描：检测是否使用"正文 书名_X"格式
     has_zhengwen = any(re.match(r'^正文\s+\S+[_]', l.strip()) for l in lines[:50])
 
-    # 大章节模式（篇级别）- level 1
+    # 大章节模式（篇/卷，容器节点）- level 1
+    # 注意：前言/序章/楔子/后记这类是独立的前后辅文，不是容器，
+    # 若当成一级会把后面所有章节都吞进它名下，故放到子章节里。
     main_patterns = [
-        # 序篇、引子、楔子
-        r'^(序篇|序章|引子|楔子|前言|尾声|后记|附录)',
         # 第X篇
         r'^(第[一二三四五六七八九十百千万零\d]+篇)',
         # 第X卷
@@ -182,6 +278,8 @@ def find_chapter_splits(content: str) -> List[dict]:
 
     # 小章节模式（章级别）- level 2
     sub_patterns = [
+        # 序章、引子、楔子、前言、尾声、后记、附录（独立辅文）
+        r'^(序篇|序章|序言|前言|引子|楔子|尾声|后记|附录)',
         # 第X章
         r'^(第[一二三四五六七八九十百千万零\d]+章)',
         # 第X节

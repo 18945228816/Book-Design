@@ -9,6 +9,8 @@ const router = useRouter()
 const bookId = route.params.id
 
 const book = ref(null)
+const bookTitle = ref('')
+const bookAuthor = ref('')
 const chapters = ref([])
 const loading = ref(false)
 const saving = ref(false)
@@ -18,12 +20,17 @@ const editTitleValue = ref('')
 
 const currentChapter = computed(() => chapters.value[selectedIndex.value] || null)
 
+// 层级文案：0=简介，1=一级（父级容器，如“篇/卷”），2=二级（具体章节）
+const levelLabel = (level) => (level === 0 ? '简介' : level === 1 ? '一级' : '二级')
+
 // 加载书籍和章节
 onMounted(async () => {
   loading.value = true
   try {
     const res = await bookApi.getDetail(bookId)
     book.value = res
+    bookTitle.value = res.title || ''
+    bookAuthor.value = res.author || ''
     chapters.value = (res.chapters || []).map(ch => ({
       title: ch.title,
       content: '', // 先不加载内容，选中时再加载
@@ -77,22 +84,27 @@ const handleConfirmRename = (index) => {
   editingTitle.value = null
 }
 
-// 切换层级（篇 ↔ 章）
+// 依据层级和顺序重算 parent_title：二级挂在它前面最近的一级下。
+// 这样升级/降级时，原本挂在该节点下的子章会自动改挂到新的一级。
+const recomputeParents = () => {
+  let currentParent = null
+  for (const ch of chapters.value) {
+    if (ch.level === 1) {
+      currentParent = ch.title
+      ch.parent_title = null
+    } else if (ch.level === 2) {
+      ch.parent_title = currentParent
+    }
+    // level 0（简介）不参与父子关系
+  }
+}
+
+// 切换层级（一级 ↔ 二级）
 const handleToggleLevel = (index) => {
   const ch = chapters.value[index]
   if (ch.level === 0) return
   ch.level = ch.level === 1 ? 2 : 1
-  if (ch.level === 1) {
-    ch.parent_title = null
-  } else {
-    // 找前面最近的 level-1 作为父级
-    for (let i = index - 1; i >= 0; i--) {
-      if (chapters.value[i].level === 1) {
-        ch.parent_title = chapters.value[i].title
-        break
-      }
-    }
-  }
+  recomputeParents()
 }
 
 // 新增章节（在当前位置之后插入）
@@ -265,8 +277,9 @@ const handleDelete = async () => {
   ElMessage.success('已删除')
 }
 
-// 更新 chapter_order
+// 更新 chapter_order，并同步父子关系
 const updateOrders = () => {
+  recomputeParents()
   chapters.value.forEach((ch, i) => {
     ch.chapter_order = i + 1
   })
@@ -276,6 +289,11 @@ const updateOrders = () => {
 const handleSave = async () => {
   saving.value = true
   try {
+    if (!bookTitle.value.trim()) {
+      ElMessage.warning('请填写书名')
+      saving.value = false
+      return
+    }
     // 保存前加载所有未读取的章节内容
     for (let i = 0; i < chapters.value.length; i++) {
       if (!chapters.value[i]._loaded) {
@@ -288,6 +306,15 @@ const handleSave = async () => {
       level: ch.level,
       parent_title: ch.parent_title
     }))
+
+    // 书名/作者有改动时先更新书籍信息，再保存章节
+    if (bookTitle.value.trim() !== (book.value?.title || '') ||
+        (bookAuthor.value.trim() || null) !== (book.value?.author || null)) {
+      await bookApi.update(bookId, {
+        title: bookTitle.value.trim(),
+        author: bookAuthor.value.trim() || null
+      })
+    }
     await bookApi.updateChapters(bookId, payload)
     ElMessage.success('保存成功')
     router.push(`/books/${bookId}`)
@@ -316,7 +343,14 @@ const handleBack = () => {
       <div class="toolbar-left">
         <el-button @click="router.push('/')" icon="HomeFilled">首页</el-button>
         <el-button @click="handleBack" icon="ArrowLeft">返回</el-button>
-        <h3 v-if="book">《{{ book.title }}》章节编辑</h3>
+        <div class="book-meta-fields">
+          <el-input v-model="bookTitle" size="small" class="book-title-input" placeholder="书名">
+            <template #prepend>书名</template>
+          </el-input>
+          <el-input v-model="bookAuthor" size="small" class="book-author-input" placeholder="作者（可空）">
+            <template #prepend>作者</template>
+          </el-input>
+        </div>
       </div>
       <div class="toolbar-right">
         <el-button @click="handleSkip">跳过，直接阅读</el-button>
@@ -335,7 +369,7 @@ const handleBack = () => {
           <div
             v-for="(ch, index) in chapters"
             :key="index"
-            :class="['chapter-item', { active: selectedIndex === index }]"
+            :class="['chapter-item', { active: selectedIndex === index, 'level-2-item': ch.level === 2 }]"
             @click="handleSelect(index)"
           >
             <!-- 编辑标题模式 -->
@@ -352,14 +386,14 @@ const handleBack = () => {
             <div v-else class="title-display">
               <span class="order">{{ index + 1 }}.</span>
               <span class="title">{{ ch.title }}</span>
-              <span class="level-tag" v-if="ch.level === 0">简介</span>
-              <span class="level-tag" v-else-if="ch.level === 1">篇</span>
-              <span class="level-tag level-2" v-else>章</span>
+              <span class="level-tag" :class="{ 'level-1-tag': ch.level === 1, 'level-2-tag': ch.level === 2 }">
+                {{ levelLabel(ch.level) }}
+              </span>
             </div>
             <div class="item-actions" @click.stop>
               <el-button size="small" text @click="handleStartRename(index)">重命名</el-button>
-              <el-button size="small" text @click="handleToggleLevel(index)">
-                {{ ch.level === 1 ? '降为章' : '升为篇' }}
+              <el-button v-if="ch.level !== 0" size="small" text @click="handleToggleLevel(index)">
+                {{ ch.level === 1 ? '降为二级' : '升为一级' }}
               </el-button>
             </div>
           </div>
@@ -418,6 +452,20 @@ const handleBack = () => {
   margin: 0;
 }
 
+.book-meta-fields {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.book-title-input {
+  width: 220px;
+}
+
+.book-author-input {
+  width: 180px;
+}
+
 .toolbar-right {
   display: flex;
   gap: 8px;
@@ -460,6 +508,23 @@ const handleBack = () => {
   transition: background-color 0.2s;
 }
 
+/* 二级章节缩进并加左侧层级线，父子关系一眼可见 */
+.chapter-item.level-2-item {
+  padding-left: 26px;
+  position: relative;
+}
+
+.chapter-item.level-2-item::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: #dcdfe6;
+  border-radius: 2px;
+}
+
 .chapter-item:hover {
   background-color: #ecf5ff;
 }
@@ -493,9 +558,15 @@ const handleBack = () => {
   background: #f0f0f0;
   padding: 1px 6px;
   border-radius: 3px;
+  flex-shrink: 0;
 }
 
-.level-tag.level-2 {
+.level-tag.level-1-tag {
+  color: #409eff;
+  background: #ecf5ff;
+}
+
+.level-tag.level-2-tag {
   color: #67c23a;
   background: #f0f9eb;
 }
